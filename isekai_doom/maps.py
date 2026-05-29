@@ -1,149 +1,179 @@
-"""maps.py — the three level layouts plus the demon-girl catchphrases.
+"""maps.py — level layouts, the demon-girl catchphrases, and the parser.
 
-Each level is authored as a list of equal-length text rows so it's easy to
-read and edit by hand. `parse_level` turns those characters into:
-    - grid:    2D list of ints (0 = walkable, >0 = wall texture id)
-    - start:   (x, y) float spawn position for the player (tile centers)
-    - enemies: list of (x, y) demon-girl spawn points
-    - pickups: list of dicts {"x","y","type"} for health/mana pickups
+Levels are authored as lists of text rows. The parser turns them into a
+numeric wall grid plus lists of entities (player start, enemies by type,
+pickups, ammo, powerups, doors). Rows are auto-padded with a fill wall
+character so a miscounted row can never crash the game.
 
-Character legend:
-    '#' brick wall     'F' flesh wall     'R' rune wall    'E' exit portal
-    '.' empty floor    'P' player start   'D' demon spawn
-    'H' health pickup  'M' mana pickup
+Character legend
+  Walls:    '#' brick   'F' flesh   'R' rune   'B' boss-wall   'T' tech-metal
+            '|' door     'X' exit portal
+  Space:    '.' empty floor          'P' player start
+  Enemies:  'i' imp   'c' caster   'b' brute   'd' dasher   'Q' boss
+  Pickups:  'h' health   'm' mana   'a' armor
+  Ammo:     's' shells   'r' rounds   'e' energy
+  Powerups: 'q' quad damage   'z' haste   'g' divine shield (guardian)
 """
 
-from . import config   # Pull in the texture id constants (TEX_BRICK, etc.).
+from . import config   # Texture id constants.
 
 # Original anime-flavored catchphrases the demon-girls "shout" (shown as text).
 CATCHPHRASES = [
-    "Baka!",                 # "Idiot!"
-    "Kyaa~!",                # Surprised squeal.
-    "Senpai, notice me!",    # Classic clingy line.
-    "Itadakimasu!",          # "Let's eat!" — she's eyeing you.
-    "Nani?!",                # "What?!"
-    "Yamete kudasai~",       # "Please stop~"
-    "Ara ara~",              # Teasing trope.
-    "Daisuki!",              # "I love it!"
-    "Sugoi!",                # "Amazing!"
-    "Mou~ ikitai!",          # Playful whine.
-    "Tasukete!",             # "Help me!"
-    "Pyon pyon~",            # Cute hopping sound.
+    "Baka!", "Kyaa~!", "Senpai, notice me!", "Itadakimasu!", "Nani?!",
+    "Yamete kudasai~", "Ara ara~", "Daisuki!", "Sugoi!", "Mou~ ikitai!",
+    "Tasukete!", "Pyon pyon~", "Ehehe~ gotcha!", "Uso da!", "Maji?!",
+    "Kowai~", "Hidoi!", "Gomen ne~ not really!", "Ganbatte... not!",
 ]
 
-# Map each authored character to its wall texture id (only for solid cells).
+# Map each authored wall character to its wall texture id.
 _CHAR_TO_WALL = {
-    "#": config.TEX_BRICK,   # Brick.
-    "F": config.TEX_FLESH,   # Flesh.
-    "R": config.TEX_RUNE,    # Rune stone.
-    "E": config.TEX_EXIT,    # Exit portal.
+    "#": config.TEX_BRICK, "F": config.TEX_FLESH, "R": config.TEX_RUNE,
+    "X": config.TEX_EXIT, "|": config.TEX_DOOR, "T": config.TEX_METAL,
+    "B": config.TEX_BOSS,
+}
+# Map enemy characters to archetype keys.
+_CHAR_TO_ENEMY = {"i": "imp", "c": "caster", "b": "brute", "d": "dasher", "Q": "boss"}
+# Map pickup/ammo/powerup characters to a (category, kind) the game understands.
+_CHAR_TO_PICKUP = {
+    "h": "health", "m": "mana", "a": "armor",
+    "s": "shells", "r": "rounds", "e": "energy",
+    "q": "quad", "z": "haste", "g": "shield",
 }
 
 
-def parse_level(rows, name):
-    """Convert authored text rows into a structured level dictionary."""
-    grid = []                                  # Numeric wall grid we will build.
-    start = (1.5, 1.5)                         # Default player spawn if none marked.
-    enemies = []                               # Collected demon spawn points.
-    pickups = []                               # Collected pickup spawns.
+def parse_level(rows, name, fill="#"):
+    """Convert authored text rows into a structured, padded level dictionary."""
+    width = max(len(r) for r in rows)            # Widest row defines the width.
+    rows = [r.ljust(width, fill) for r in rows]  # Pad every row to that width.
 
-    # Walk every authored row (y is the vertical grid coordinate).
+    grid = []                                    # Numeric wall grid.
+    start = (1.5, 1.5)                           # Default player spawn.
+    enemies = []                                 # (etype, x, y) spawns.
+    pickups = []                                 # {x, y, kind} pickups.
+    doors = []                                   # (x, y) door cells.
+
     for y, line in enumerate(rows):
-        grid_row = []                          # The numeric row we are assembling.
-        # Walk every character/column in this row (x is horizontal).
+        grid_row = []
         for x, ch in enumerate(line):
-            if ch in _CHAR_TO_WALL:            # Solid wall character?
-                grid_row.append(_CHAR_TO_WALL[ch])   # Store its texture id.
-            else:                              # Otherwise it's walkable (id 0).
-                grid_row.append(0)             # Mark the cell as empty floor.
-                cx, cy = x + 0.5, y + 0.5      # Tile-center coordinates for entities.
-                if ch == "P":                  # Player start marker.
-                    start = (cx, cy)           # Remember the spawn position.
-                elif ch == "D":                # Demon spawn marker.
-                    enemies.append((cx, cy))   # Record an enemy spawn.
-                elif ch == "H":                # Health pickup marker.
-                    pickups.append({"x": cx, "y": cy, "type": "health"})
-                elif ch == "M":                # Mana pickup marker.
-                    pickups.append({"x": cx, "y": cy, "type": "mana"})
-        grid.append(grid_row)                  # Append the finished row to the grid.
+            if ch in _CHAR_TO_WALL:
+                wall_id = _CHAR_TO_WALL[ch]
+                grid_row.append(wall_id)
+                if wall_id == config.TEX_DOOR:
+                    doors.append((x, y))         # Remember door cells.
+            else:
+                grid_row.append(0)               # Walkable floor.
+                cx, cy = x + 0.5, y + 0.5        # Entity center.
+                if ch == "P":
+                    start = (cx, cy)
+                elif ch in _CHAR_TO_ENEMY:
+                    enemies.append((_CHAR_TO_ENEMY[ch], cx, cy))
+                elif ch in _CHAR_TO_PICKUP:
+                    pickups.append({"x": cx, "y": cy, "kind": _CHAR_TO_PICKUP[ch]})
+        grid.append(grid_row)
 
-    # Bundle everything into a single dictionary describing the level.
     return {
-        "name": name,                          # Display name.
-        "grid": grid,                          # Wall layout.
-        "width": len(grid[0]),                 # Number of columns.
-        "height": len(grid),                   # Number of rows.
-        "start": start,                        # Player spawn.
-        "enemies": enemies,                    # Enemy spawns.
-        "pickups": pickups,                    # Pickup spawns.
+        "name": name,
+        "grid": grid,
+        "width": len(grid[0]),
+        "height": len(grid),
+        "start": start,
+        "enemies": enemies,
+        "pickups": pickups,
+        "doors": doors,
     }
 
 
 # ---------------------------------------------------------------------------
-# Level 1 — The Entry Labyrinth (brick maze, gentle introduction)
+# Level 1 — The Entry Labyrinth (brick + doors; imps; teaches the basics)
 # ---------------------------------------------------------------------------
 LEVEL_1 = parse_level([
-    "################",   # Solid top border wall.
-    "#P.....#......D#",   # Player start (left), a demon waiting (right).
-    "#.####.#.####..#",   # Interior corridor walls.
-    "#.#..#.#.#..H#.#",   # A health pickup tucked in a room.
-    "#.#.D#...#.##..#",   # A demon in a pocket.
-    "#.#..####.#..#.#",   # More maze walls.
-    "#.#......M#..#.#",   # A mana pickup.
-    "#.######.###.#.#",   # Dividing walls.
-    "#......#....#..#",   # Open passage.
-    "#.####.####.##.#",   # Walls shaping the route.
-    "#.#D.#....#..D.#",   # Two demons guarding the way.
-    "#.#.######.###.#",   # Wall block.
-    "#.#........#...#",   # Corridor toward the exit.
-    "#.########.#.#.#",   # Near-exit walls.
-    "#..........#.EE#",   # The exit portal (bottom-right).
-    "################",   # Solid bottom border wall.
-], "Level 1 — The Entry Labyrinth")
+    "########################",
+    "#P...i.....|....h....#.X#",
+    "#.####.###.#.####.#.#.|.#",
+    "#.#..#...#.#....#.#.#.#.#",
+    "#.#.s#.#.#.#.##.#.#.###.#",
+    "#.#..#.#.#...##...#...i.#",
+    "#.####.#.#########.####.#",
+    "#....i.#.....h...#....#.#",
+    "####.#.#####.###.#.##.#.#",
+    "#....#.....#.#.i.#..#.#.#",
+    "#.######.#.#.#.###.#.#.#.",
+    "#.#......#.#.#...#.#.#m#.",
+    "#.#.####.#.#.###.#.#.#.#.",
+    "#...#..i.#.....|...#...#.",
+    "#.###.##########.#######.",
+    "#.........a.....|...i...#",
+    "########################",
+], "Level 1 — The Entry Labyrinth", fill="#")
 
 # ---------------------------------------------------------------------------
-# Level 2 — The Flesh Catacombs (organic walls, more demons)
+# Level 2 — The Flesh Catacombs (casters + brutes; metal doors; shotgun ammo)
 # ---------------------------------------------------------------------------
 LEVEL_2 = parse_level([
-    "FFFFFFFFFFFFFFFF",   # Flesh walls all around.
-    "FP...D....M...DF",   # Player start, demons, and a mana pickup.
-    "F.FFFF.FFFF.FF.F",   # Flesh corridor walls.
-    "F.F..D....D.F..F",   # Demons in the open.
-    "F.F.FFFFFF.FF.FF",   # Branching corridors.
-    "F...F....H.....F",   # A mid-level health pickup.
-    "FFF.F.FF.FFFFF.F",   # Maze walls.
-    "F.....F..F...D.F",   # Open room with a demon.
-    "F.FFF.FF.F.FFF.F",   # More walls.
-    "F.F.D....F.F...F",   # A lurking demon.
-    "F.F.FFFF.F.F.FFF",   # Wall block.
-    "F.F....M.F.....F",   # Mana pickup in a nook.
-    "F.FFFF.FFFFFFF.F",   # Long wall.
-    "F....D.......D.F",   # Two demons near the exit.
-    "FFFFFFFFFFF.FEEF",   # Exit portal bottom-right.
-    "FFFFFFFFFFFFFFFF",   # Bottom flesh wall.
-], "Level 2 — The Flesh Catacombs")
+    "FFFFFFFFFFFFFFFFFFFFFFFF",
+    "FP...c....F....s...c...F",
+    "F.FFFF.FF.|.FFFF.FF.FF.F",
+    "F.F..b...F....F.h.F..b.F",
+    "F.F.FFF.FF.FF.F.FF.FF.FF",
+    "F...c.....FF..|.....c..F",
+    "FFFF.FFFF.F.FF.FFFF.FF.F",
+    "F....F..a.F.s..F....F..F",
+    "F.FF.F.FF.|.FF.|.FF.F.FF",
+    "F.F..b....F....F..b.F..F",
+    "F.F.FFFF.FFFF.FFFF.FF.FF",
+    "F.F....c.F..m.F....c...F",
+    "F.FFFF.FF.FF.FF.FFFFFF.F",
+    "F....b....|.....|....b.X",
+    "FFFFFFFFFFFFFFFFF.FFFF|FF",
+    "F....h.....e.....c....mF",
+    "FFFFFFFFFFFFFFFFFFFFFFFF",
+], "Level 2 — The Flesh Catacombs", fill="F")
 
 # ---------------------------------------------------------------------------
-# Level 3 — The Rune Sanctum (the demon-girl horde finale)
+# Level 3 — The Rune Sanctum (dashers + casters + brutes; powerups; energy)
 # ---------------------------------------------------------------------------
 LEVEL_3 = parse_level([
-    "RRRRRRRRRRRRRRRR",   # Rune walls — the ritual chamber.
-    "RP....R....R..DR",   # Player start, far demon.
-    "R.RRR.R.RR.R.RRR",   # Ornate divisions.
-    "R.R.D...RM.R...R",   # Demon plus mana.
-    "R.R.RRRRRR.RRR.R",   # Walls.
-    "R...R....H.....R",   # A health pickup.
-    "R.RRR.RR.RRRRR.R",   # Maze.
-    "R.....RD.R..DD.R",   # A cluster of demons.
-    "R.RRR.RR.R.RRR.R",   # Walls.
-    "R.RDD....R.R.M.R",   # Two more demons + mana.
-    "R.R.RRRR.R.RRR.R",   # Walls.
-    "R.R....R.R....DR",   # Demon near a corner.
-    "R.RRRR.R.RRRRR.R",   # Walls.
-    "R..D.......DD..R",   # Final wave before the exit.
-    "RRRRRRRRRR.REEER",   # Triple-wide exit portal.
-    "RRRRRRRRRRRRRRRR",   # Bottom rune wall.
-], "Level 3 — The Rune Sanctum")
+    "RRRRRRRRRRRRRRRRRRRRRRRR",
+    "RP...d...R....q....R..cR",
+    "R.RRR.RR.R.RRRR.RR.R.R.R",
+    "R.R.c...R....R.h.R..d.R.",
+    "R.R.RRR.RR.RR.R.RR.RR.RR",
+    "R...d.....RR..|...z.d..R",
+    "RRRR.RRRR.R.RR.RRRR.RR.R",
+    "R..b.R.dd.R.e..R..b.R..R",
+    "R.RR.R.RR.|.RR.|.RR.R.RR",
+    "R.R..c....R....R..c.R..R",
+    "R.R.RRRR.RRRR.RRRR.RR.RR",
+    "R.R..d.g.R..a.R....d...R",
+    "R.RRRR.RR.RR.RR.RRRRRR.R",
+    "R..b......|..d..|...b..X",
+    "RRRRRRRRRRRRRRRRR.RRRR|RR",
+    "R...h....e....q....d..mR",
+    "RRRRRRRRRRRRRRRRRRRRRRRR",
+], "Level 3 — The Rune Sanctum", fill="R")
+
+# ---------------------------------------------------------------------------
+# Level 4 — The Throne of the Demon Queen (BOSS arena + adds + powerups)
+# ---------------------------------------------------------------------------
+LEVEL_4 = parse_level([
+    "BBBBBBBBBBBBBBBBBBBBBBBB",
+    "BP......a....e....h....B",
+    "B.BB.BB.........BB.BB...B",
+    "B.B...........q.....B..B",
+    "B...BB...........BB....B",
+    "B.B......d.....d......B.B",
+    "B.BB.................BB.B",
+    "B........BBB.BBB........B",
+    "B...g....B.....B....z...B",
+    "B........BB.Q.BB........B",
+    "B.BB.....B.....B.....BB.B",
+    "B.B......BBB.BBB......B.B",
+    "B...BB...........BB....B",
+    "B.B.....d.....d......B.B",
+    "B.BB.....s....r....BB..B",
+    "B......h....m....a.....X",
+    "BBBBBBBBBBBBBBBBBBBBBBBB",
+], "Level 4 — Throne of the Demon Queen", fill="B")
 
 # The ordered list of levels the game plays through.
-LEVELS = [LEVEL_1, LEVEL_2, LEVEL_3]
+LEVELS = [LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4]

@@ -175,6 +175,98 @@ class SoundBank:
         self.sounds["death"] = self._compose([
             (0.0, self._tone(400, 60, 1.2, 0.4, "sawtooth")),
         ])
+        # Seraph Shotgun: a big layered boom + noise crunch.
+        self.sounds["shotgun"] = self._compose([
+            (0.0, self._tone(220, 70, 0.22, 0.45, "square")),
+            (0.0, self._noise(0.22, 0.4)),
+            (0.02, self._tone(120, 50, 0.18, 0.3, "sawtooth")),
+        ])
+        # Rosary Gatling: a short snappy crack (fired rapidly).
+        self.sounds["gatling"] = self._compose([
+            (0.0, self._tone(500, 200, 0.06, 0.3, "square")),
+            (0.0, self._noise(0.05, 0.2)),
+        ])
+        # Goddess Beam: a sustained shimmering sweep.
+        self.sounds["beam"] = self._compose([
+            (0.0, self._tone(400, 1400, 0.45, 0.35, "sine")),
+            (0.0, self._tone(800, 1800, 0.45, 0.18, "triangle")),
+        ])
+        # Out-of-ammo "click".
+        self.sounds["no_ammo"] = self._compose([
+            (0.0, self._tone(180, 120, 0.05, 0.25, "square")),
+        ])
+        # Powerup grabbed: a rising sparkly triad.
+        self.sounds["powerup"] = self._compose([
+            (0.0, self._tone(523, 523, 0.1, 0.3, "triangle")),
+            (0.08, self._tone(784, 784, 0.1, 0.3, "triangle")),
+            (0.16, self._tone(1175, 1175, 0.22, 0.3, "triangle")),
+        ])
+        # Door sliding open: a mechanical whir.
+        self.sounds["door"] = self._compose([
+            (0.0, self._tone(120, 300, 0.4, 0.22, "sawtooth")),
+            (0.0, self._noise(0.4, 0.07)),
+        ])
+        # Boss appears / roars: a deep menacing growl.
+        self.sounds["boss_roar"] = self._compose([
+            (0.0, self._tone(90, 50, 1.0, 0.5, "sawtooth")),
+            (0.0, self._tone(140, 70, 1.0, 0.3, "square")),
+            (0.0, self._noise(1.0, 0.15)),
+        ])
+
+    # ----- music ------------------------------------------------------------
+
+    def build_music(self):
+        """Synthesize a couple of looping background tracks."""
+        if not self.enabled:
+            return
+        self.music = {}                          # name -> looping Sound.
+        self.music_name = None                   # Currently playing track.
+        self.music_vol = 0.22                     # Base music volume.
+
+        # Note frequencies (Hz) for a small minor-key palette.
+        A2, C3, D3, E3, F3, G3 = 110, 130.8, 146.8, 164.8, 174.6, 196.0
+        A3, C4, D4, E4, F4, G4 = 220, 261.6, 293.7, 329.6, 349.2, 392.0
+        A4 = 440
+
+        beat = 60.0 / 140.0                       # 140 BPM beat length.
+
+        # --- Battle theme: driving bass + an arpeggio lead over 8 beats ---
+        seg = []
+        bass = [A2, A2, F3, F3, C3, C3, E3, E3]   # One note per beat.
+        for i, n in enumerate(bass):
+            seg.append((i * beat, self._tone(n, n, beat * 0.9, 0.28, "square")))
+        lead = [A4, E4, C4, E4, A4, G4, E4, C4, F4, C4, A3, C4, G4, D4, E4, G4]
+        for i, n in enumerate(lead):              # Two lead notes per beat (eighths).
+            seg.append((i * beat / 2, self._tone(n, n, beat * 0.45, 0.14, "triangle")))
+        self.music["battle"] = self._compose(seg)
+
+        # --- Menu theme: slower, gentler pad-like arpeggio over 8 beats ---
+        seg2 = []
+        pad = [A3, C4, E4, A4, G4, E4, D4, C4]
+        for i, n in enumerate(pad):
+            seg2.append((i * beat, self._tone(n, n, beat * 0.95, 0.18, "sine")))
+        bass2 = [A2, A2, F3, F3, G3, G3, E3, E3]
+        for i, n in enumerate(bass2):
+            seg2.append((i * beat, self._tone(n, n, beat * 0.9, 0.16, "triangle")))
+        self.music["menu"] = self._compose(seg2)
+
+    def play_music(self, name):
+        """Loop a named music track on a reserved channel."""
+        if not self.enabled or not hasattr(self, "music") or name not in self.music:
+            return
+        if getattr(self, "music_name", None) == name:
+            return                                # Already playing this track.
+        self.music_name = name
+        ch = pygame.mixer.Channel(7)              # Reserve channel 7 for music.
+        ch.play(self.music[name], loops=-1)       # Loop forever.
+        ch.set_volume(0 if self.muted else self.music_vol)
+        self.music_channel = ch
+
+    def stop_music(self):
+        """Stop any looping music."""
+        if getattr(self, "music_channel", None):
+            self.music_channel.stop()
+        self.music_name = None
 
     # ----- playback control -------------------------------------------------
 
@@ -187,6 +279,9 @@ class SoundBank:
         self.sounds[name].play()
 
     def toggle_mute(self):
-        """Flip the mute flag and return the new state."""
+        """Flip the mute flag (also muting/unmuting the music) and return it."""
         self.muted = not self.muted    # Invert the mute flag.
+        # Reflect the new state on the looping music channel, if any.
+        if getattr(self, "music_channel", None):
+            self.music_channel.set_volume(0 if self.muted else self.music_vol)
         return self.muted              # Report whether we are now muted.

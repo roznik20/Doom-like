@@ -1,31 +1,28 @@
 # ISEKAI DOOM — Reborn in the Demon World
 
 A complete, from-scratch **Doom-style raycasting FPS written in pure Python**
-(only `pygame` + `numpy`). You play an ordinary person who died, got
-*isekai'd* (reincarnated) by a goddess, and woke up in a labyrinth full of
-**anime demon-girls** who shout catchphrases at you. Fight through three
-levels with a **Holy Sword** and **Spirit Bolts**, and escape.
+(only `pygame` + `numpy`). You died, got *isekai'd* by a goddess, and woke up in
+a labyrinth full of **anime demon-girls** who shout catchphrases at you. Fight
+through four levels with **five holy weapons**, survive ranged casters, tanky
+brutes, fast swarmers, and finally the **Demon Queen** boss — then escape.
 
 Every line of code is commented so you can follow exactly how the engine works.
 
-![ISEKAI DOOM](https://img.shields.io/badge/engine-raycasting-ff3b6b) ![python](https://img.shields.io/badge/python-3.8%2B-blue)
+![engine](https://img.shields.io/badge/engine-raycasting-ff3b6b) ![python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 ---
 
 ## Quick start
 
 ```bash
-# 1. Install the two dependencies
-pip install -r requirements.txt
-
-# 2. Run the game
-python main.py
+pip install -r requirements.txt   # pygame + numpy
+python main.py                    # opens the window on the title screen
 ```
 
-A window opens on the title screen. Press **Enter** to begin.
+On the title screen, pick a difficulty with **↑/↓** and press **Enter**.
 
-> **Headless servers:** the game needs a real display + audio device. On a
-> machine without one it still imports and runs logic (used for testing) but
+> **Headless servers:** the game needs a real display + audio device. Without
+> one it still imports and runs its logic (used for automated testing) but
 > won't show a window.
 
 ---
@@ -34,57 +31,84 @@ A window opens on the title screen. Press **Enter** to begin.
 
 | Input | Action |
 |-------|--------|
-| `W` / `S` | Move forward / back |
-| `A` / `D` | Strafe left / right |
-| `←` / `→` or **Mouse** | Turn / look |
-| **Left-Click** / `Space` | Attack |
-| `1` / `2` | Switch weapon (Holy Sword / Spirit Bolt) |
+| `W` `A` `S` `D` | Move / strafe |
+| `←` `→` or **Mouse** | Turn / look |
+| **Left-Click** / `Space` | Fire |
+| `1` `2` `3` `4` `5` | Select weapon |
+| **Mouse Wheel** | Cycle weapons |
 | `Shift` | Sprint |
 | `M` | Mute / unmute |
-| `Esc` | Pause (in pause: `Enter` resume, `R` restart level) |
-| `Enter` | Start / continue on menus |
+| `Esc` | Pause |
+| In pause: `Enter` resume · `R` restart level · `T` quit to title |
+| `Enter` | Confirm on menus |
 
 ---
 
-## Gameplay
+## Arsenal (5 weapons)
 
-- **Holy Sword** — instant short-range cone melee. No ammo, just a cooldown.
-- **Spirit Bolt** — spends **MP** to launch a magic orb that flies until it
-  hits a wall or a demon-girl. MP regenerates over time.
-- **Pickups** — red potions restore **HP**, blue crystals restore **MP**.
-- **Demon-girls** — wander until they see you (with line of sight), then chase
-  and attack in melee, shouting anime catchphrases. Defeat them all and reach
-  the glowing **exit portal** to advance. Clear all three levels to win.
+| # | Weapon | Type | Ammo | Notes |
+|---|--------|------|------|-------|
+| 1 | **Holy Sword** | Melee cone | — | Fast, free, short reach |
+| 2 | **Spirit Bolt** | Projectile | Mana | Travelling magic orb, leaves a trail |
+| 3 | **Seraph Shotgun** | Hitscan spread | Shells | 7 pellets, big knock, screen shake |
+| 4 | **Rosary Gatling** | Hitscan rapid | Rounds | Very high fire rate |
+| 5 | **Goddess Beam** | Piercing beam | Energy | Hits *every* enemy in a line |
+
+Damage is multiplied while **Quad Damage** is active.
+
+---
+
+## Enemies (anime demon-girls)
+
+| Type | Behavior |
+|------|----------|
+| **Imp-chan** | Basic, fairly quick melee chibi |
+| **Caster-chan** | Floats, keeps her distance, throws heart projectiles |
+| **Brute-chan** | Huge, slow, very tanky, heavy melee |
+| **Dasher-chan** | Tiny, winged, extremely fast swarmer |
+| **Demon Queen** | The boss: melee + fireball volleys + summons dashers |
+
+Each shouts original anime-style catchphrases when she spots you, attacks, or
+faints. Difficulty (4 presets) scales their health, damage, speed, and fire rate.
+
+---
+
+## Powerups & pickups
+
+- **Health** potions, **Mana** crystals, **Armor** shards (armor soaks part of
+  incoming damage).
+- **Ammo**: shells, rounds, energy.
+- **Quad Damage** (×4 damage), **Haste** (move faster), **Divine Shield**
+  (temporary invulnerability) — all with on-screen countdown chips.
 
 ---
 
 ## How the engine works
 
-This is the classic **raycasting** technique (Wolfenstein 3D / Doom-era):
+This is the classic **raycasting** technique, fully built up:
 
 1. The world is a 2-D grid of wall cells (`maps.py`).
-2. For every vertical column of the screen, `raycaster.py` shoots one ray and
-   uses the **DDA** algorithm to step through grid cells until it hits a wall.
-3. The wall's distance decides how tall to draw that column: a 1-pixel-wide
-   strip of the wall's texture is stretched to that height. Near walls look
-   tall, far walls look short — that's the 3-D illusion.
-4. Each column's distance is stored in a **z-buffer** so **sprites** (the
-   demon-girls, pickups, and bolts) can be billboarded into the scene and
-   correctly hidden behind closer walls.
-5. Everything is rendered at a low internal resolution (480×270) and scaled up
-   to the window for speed and a crunchy retro look.
+2. For every screen column, `raycaster.py` casts a ray with the **DDA**
+   algorithm (camera-plane model — no fisheye) and stretches a 1px texture
+   strip to the wall's distance. Near walls are tall, far walls short.
+3. **Floors and ceilings are textured** via vectorized numpy "floor casting":
+   each screen row is projected into the world and the texture is sampled per
+   pixel in one numpy fancy-index (fast enough for 60+ FPS in pure Python).
+4. A per-column **z-buffer** lets sprites *and* particles be correctly hidden
+   behind nearer walls. Sprites are billboards; a fast path blits unoccluded
+   sprites whole, and scaled sprites are cached.
+5. **Sliding doors** open as you approach and retract into the ceiling.
+6. **Particles** (blood, sparks, kill bursts, projectile trails), **distance
+   fog**, **screen shake**, weapon **bob**, and **muzzle flashes** add polish.
 
-### No external art or audio files
+### No external art or audio files — everything is generated
 
-To keep the repo self-contained and avoid any copyright issues:
-
-- **Wall textures** are generated procedurally with `numpy` (`textures.py`).
-- **Demon-girl sprites, pickups, and the bolt** are drawn at runtime with
-  pygame vector primitives (`sprites.py`).
-- **All sound effects** are synthesized from raw waveforms at startup
-  (`audio.py`). We ship **no copyrighted anime audio**; the "anime voices" are
-  high-pitched synthesized blips paired with **original** on-screen catchphrase
-  text (`maps.py`).
+- **Wall + floor + ceiling textures**: procedural numpy (`textures.py`).
+- **All sprites** (5 enemy types, the boss, projectiles, pickups, powerups):
+  drawn at runtime with pygame primitives (`sprites.py`).
+- **All sound effects + two looping music tracks**: synthesized from raw
+  waveforms (`audio.py`). No copyrighted anime audio — the "voices" are
+  synthesized blips paired with **original** catchphrase text.
 
 ---
 
@@ -95,34 +119,37 @@ Doom-like/
 ├── main.py                 # Launcher — creates the Game and runs it
 ├── requirements.txt        # pygame + numpy
 ├── README.md               # This file
-└── isekai_doom/            # The game package
+└── isekai_doom/
     ├── __init__.py         # Package docs + version
-    ├── config.py           # Every tunable constant (speeds, damage, colors)
-    ├── textures.py         # Procedural wall textures (numpy)
-    ├── sprites.py          # Procedural anime demon-girl + item sprites
-    ├── audio.py            # Synthesized sound effects (numpy + pygame.mixer)
-    ├── maps.py             # The three level layouts + catchphrases
+    ├── config.py           # Every tunable: resolution, weapons, enemies,
+    │                       #   powerups, doors, difficulty, colors, themes
+    ├── textures.py         # Procedural wall + floor/ceiling textures (numpy)
+    ├── sprites.py          # 5 enemy types, boss, projectiles, pickups, powerups
+    ├── particles.py        # Blood/spark/trail/burst particle system
+    ├── audio.py            # Synthesized SFX + looping music
+    ├── maps.py             # Four level layouts + catchphrases + parser
     ├── input.py            # Keyboard/mouse -> named actions
-    ├── player.py           # Player position, movement, collision, vitals
-    ├── raycaster.py        # The 3-D wall + sprite renderer (DDA)
-    ├── weapon.py           # Weapons, projectiles, first-person view-model
-    ├── enemy.py            # Demon-girl spawning, AI, and combat
-    ├── hud.py              # HUD + title/pause/game-over/victory screens
-    └── game.py             # The central state machine + main loop
+    ├── player.py           # Position, movement, vitals, ammo, armor, powerups
+    ├── raycaster.py        # 3-D renderer: walls, floor/ceiling, sprites, particles
+    ├── weapon.py           # 5 weapons, projectiles, bob, muzzle flash, view-models
+    ├── enemy.py            # Enemy archetypes, AI, ranged attacks, boss, summons
+    ├── hud.py              # HUD, minimap, boss bar, powerup chips, menus
+    └── game.py             # State machine + main loop (combat, doors, fx, music)
 ```
 
 ---
 
-## Tuning the game
+## Tuning & modding
 
-Open `isekai_doom/config.py` — almost everything you'd want to change lives
-there: movement speed, weapon damage, enemy difficulty, field of view, render
-resolution, and colors. Edit the level layouts in `isekai_doom/maps.py` (they
-are plain text grids) to design your own maps.
+Open `isekai_doom/config.py` — movement, weapon stats, enemy archetypes,
+powerup durations, difficulty multipliers, field of view, render resolution,
+and per-level color themes all live there. Edit the plain-text grids in
+`isekai_doom/maps.py` to design your own levels (the legend is at the top of
+the file), and add enemy types in `enemy.py`'s `ENEMY_TYPES` table.
 
 ---
 
 ## Credits
 
-Built as a self-contained educational example of a raycasting FPS. All art,
-sound, and text are generated/written from scratch — no third-party assets.
+A self-contained educational example of a raycasting FPS. All art, sound, and
+text are generated/written from scratch — no third-party assets.

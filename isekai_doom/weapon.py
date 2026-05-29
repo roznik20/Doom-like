@@ -1,167 +1,281 @@
-"""weapon.py — the hero's arsenal and the Spirit Bolt projectile.
+"""weapon.py — the hero's full arsenal, projectiles, and view-models.
 
-Two weapons:
-  * Holy Sword  — instant, short-range cone melee. No ammo, just a cooldown.
-  * Spirit Bolt — spends mana to launch a homing-free magic orb that flies
-                  forward until it hits a wall or a demon-girl.
+Five weapons (defined in config.WEAPONS):
+  1 HOLY SWORD     — instant short-range cone melee. No ammo, fast.
+  2 SPIRIT BOLT    — spends mana; launches a travelling magic orb.
+  3 SERAPH SHOTGUN — spends shells; fires a spread of instant holy pellets.
+  4 ROSARY GATLING — spends rounds; very fast instant single shots.
+  5 GODDESS BEAM   — spends energy; a piercing instant beam that hits all
+                     enemies in a straight line.
 
-`WeaponSystem` tracks which weapon is equipped, the firing cooldowns, and the
-swing/cast animation, and it draws the first-person "view-model" (the weapon
-you see in front of you). The actual damage resolution lives in game.py so it
-can see both the player and the enemies; this module just reports intent.
+`WeaponSystem` tracks the equipped weapon, cooldowns, ammo spending, the
+firing animation, weapon bob while walking, and the muzzle flash. It returns a
+small descriptor when you fire; game.py performs the actual damage resolution
+(hitscans/beams need to see the enemies and walls).
 """
 
-import math               # Trig for projectile velocity and view-model motion.
+import math               # Trig for projectiles + view-model motion.
 import pygame             # Drawing the view-model.
-from . import config      # Cooldowns, costs, speeds.
+from . import config      # Weapon stats, bob/flash timings.
 
 
 class Projectile:
-    """A single in-flight Spirit Bolt."""
+    """A travelling orb fired by the player (Spirit Bolt) or an enemy."""
 
-    def __init__(self, x, y, angle, surf):
-        # Current world position of the bolt.
-        self.x = x                          # Bolt x.
-        self.y = y                          # Bolt y.
-        # Velocity components derived from the firing angle and bolt speed.
-        self.dx = math.cos(angle) * config.BOLT_SPEED   # X velocity.
-        self.dy = math.sin(angle) * config.BOLT_SPEED   # Y velocity.
-        # The billboard sprite used to draw the bolt in the world.
-        self.surf = surf
-        # Whether the bolt is still active (False once it hits something).
-        self.alive = True
+    def __init__(self, x, y, angle, speed, damage, radius, surf, owner, trail_color=None):
+        self.x = x                              # World x.
+        self.y = y                              # World y.
+        self.dx = math.cos(angle) * speed       # X velocity.
+        self.dy = math.sin(angle) * speed       # Y velocity.
+        self.damage = damage                    # Damage on contact.
+        self.radius = radius                    # Collision radius.
+        self.surf = surf                        # Billboard sprite.
+        self.owner = owner                      # "player" or "enemy".
+        self.alive = True                       # False once it hits something.
+        self.trail_color = trail_color          # Color for its particle trail (or None).
 
     def update(self, dt, level):
-        """Advance the bolt; deactivate it if it flies into a wall."""
-        # Move the bolt forward by velocity * time.
-        self.x += self.dx * dt              # Step x.
-        self.y += self.dy * dt              # Step y.
-        # Convert to grid indices to test for a wall collision.
-        gx, gy = int(self.x), int(self.y)
-        # Out of bounds counts as hitting something solid.
+        """Advance the projectile; die if it flies into a wall/out of bounds."""
+        self.x += self.dx * dt                  # Step x.
+        self.y += self.dy * dt                  # Step y.
+        gx, gy = int(self.x), int(self.y)        # Grid cell.
         if gx < 0 or gy < 0 or gx >= level["width"] or gy >= level["height"]:
-            self.alive = False              # Kill the bolt.
+            self.alive = False                  # Off the map.
             return
-        # If the bolt entered a wall cell, deactivate it.
-        if level["grid"][gy][gx] != 0:
-            self.alive = False              # Kill the bolt.
+        tile = level["grid"][gy][gx]            # Wall id at the cell.
+        # A wall stops the projectile (an open door does not).
+        if tile != 0:
+            if tile == config.TEX_DOOR and level.get("door_frac", {}).get((gx, gy), 0.0) >= 1.0:
+                return                          # Pass through a fully-open door.
+            self.alive = False                  # Hit a wall.
 
 
 class WeaponSystem:
-    """Tracks the equipped weapon, cooldowns, and draws the view-model."""
+    """Tracks the equipped weapon, cooldowns, ammo, bob, and view-model."""
 
-    def __init__(self, bolt_sprite):
-        # Sprite handed to each spawned Projectile so it can be billboarded.
-        self.bolt_sprite = bolt_sprite
-        # Which weapon is equipped: "sword" or "bolt".
+    def __init__(self, sprite_lookup):
+        # A callable/dict that returns a projectile sprite by name.
+        self.sprites = sprite_lookup
+        # Which weapon is equipped (a key into config.WEAPONS).
         self.current = "sword"
         # Seconds remaining before the player may fire again.
         self.cooldown = 0.0
-        # Animation timer (0 = idle); counts down while a swing/cast plays.
+        # Animation timer (counts down while a swing/cast plays).
         self.anim = 0.0
-        # How long the current weapon's animation lasts (set when fired).
         self.anim_len = 0.30
+        # Muzzle-flash timer for guns.
+        self.muzzle = 0.0
+        # Weapon-bob phase + the resulting pixel offset.
+        self.bob_phase = 0.0
+        self.bob_x = 0.0
+        self.bob_y = 0.0
+
+    # ----- selection --------------------------------------------------------
 
     def switch(self, name):
-        """Equip a weapon by name if it's a valid choice."""
-        # Only accept known weapon names.
-        if name in ("sword", "bolt"):
-            self.current = name             # Equip it.
+        """Equip a weapon by key if it exists."""
+        if name in config.WEAPONS:
+            self.current = name
+
+    def switch_slot(self, slot):
+        """Equip the weapon bound to a number-key slot (1..5)."""
+        for key, w in config.WEAPONS.items():
+            if w["slot"] == slot:
+                self.current = key
+                return
+
+    def cycle(self, direction):
+        """Cycle to the next/previous weapon (mouse wheel). direction = +1/-1."""
+        order = config.WEAPON_ORDER
+        i = order.index(self.current)            # Current index.
+        self.current = order[(i + direction) % len(order)]  # Wrap around.
 
     def display_name(self):
-        """Return the HUD-friendly name of the equipped weapon."""
-        # Map the internal id to a pretty label.
-        return "HOLY SWORD" if self.current == "sword" else "SPIRIT BOLT"
+        """HUD-friendly name of the equipped weapon."""
+        return config.WEAPONS[self.current]["name"]
 
-    def update(self, dt):
-        """Tick down the cooldown and animation timers each frame."""
-        # Reduce the cooldown but never below zero.
+    # ----- per-frame update -------------------------------------------------
+
+    def update(self, dt, moving):
+        """Tick cooldown/animation/muzzle timers and advance the weapon bob."""
         if self.cooldown > 0:
             self.cooldown = max(0.0, self.cooldown - dt)
-        # Reduce the animation timer but never below zero.
         if self.anim > 0:
             self.anim = max(0.0, self.anim - dt)
+        if self.muzzle > 0:
+            self.muzzle = max(0.0, self.muzzle - dt)
+        # Advance the bob phase only while the player is walking.
+        if moving:
+            self.bob_phase += dt * config.WEAPON_BOB_SPEED
+        else:
+            # Ease the bob back toward rest when standing still.
+            self.bob_phase += dt * 2.0
+        # A figure-eight bob: x uses the phase, y uses double frequency.
+        self.bob_x = math.sin(self.bob_phase) * config.WEAPON_BOB_AMOUNT * (1.0 if moving else 0.2)
+        self.bob_y = abs(math.sin(self.bob_phase * 2)) * config.WEAPON_BOB_AMOUNT * (1.0 if moving else 0.2)
+
+    # ----- firing -----------------------------------------------------------
+
+    def _has_ammo(self, player):
+        """Return True if the equipped weapon can be paid for right now."""
+        w = config.WEAPONS[self.current]
+        ammo = w.get("ammo")
+        if ammo is None:
+            return True                          # Free weapon (sword).
+        if ammo == "mana":
+            return player.mana >= w["ammo_cost"]  # Mana-based.
+        return player.ammo.get(ammo, 0) >= w["ammo_cost"]  # Item ammo.
+
+    def _spend_ammo(self, player):
+        """Deduct the equipped weapon's ammo/mana cost."""
+        w = config.WEAPONS[self.current]
+        ammo = w.get("ammo")
+        if ammo is None:
+            return
+        if ammo == "mana":
+            player.mana -= w["ammo_cost"]
+        else:
+            player.ammo[ammo] -= w["ammo_cost"]
 
     def try_fire(self, player):
-        """Attempt to fire the equipped weapon.
+        """Attempt to fire. Returns a descriptor dict, or None if it can't fire.
 
-        Returns one of:
-          ("sword", None)               -> a melee swing happened (resolve a cone)
-          ("bolt", Projectile)          -> a bolt was spawned (add to the world)
-          None                          -> couldn't fire (on cooldown / no mana)
+        Descriptors (handled by game.py):
+          {"kind":"melee","damage","range","arc"}
+          {"kind":"projectile","proj":Projectile}
+          {"kind":"hitscan","damage","pellets","spread","range"}
+          {"kind":"beam","damage","range"}
         """
-        # Reject the shot if we're still on cooldown.
         if self.cooldown > 0:
-            return None
+            return None                          # Still cooling down.
+        if not self._has_ammo(player):
+            return ("noammo", None)              # Signal "click" / no ammo.
 
-        if self.current == "sword":
-            # Start the swing cooldown + animation.
-            self.cooldown = config.SWORD_COOLDOWN
-            self.anim = self.anim_len = 0.30
-            # Report a melee swing; game.py resolves the damage cone.
-            return ("sword", None)
+        w = config.WEAPONS[self.current]
+        # Pay the cost and start the cooldown + animation.
+        self._spend_ammo(player)
+        self.cooldown = w["cooldown"]
+        self.anim = self.anim_len = w["anim_len"]
+        kind = w["kind"]
 
-        # Otherwise the Spirit Bolt is equipped.
-        # Refuse to cast if the player lacks the mana.
-        if player.mana < config.BOLT_COST:
-            return None
-        # Spend the mana.
-        player.mana -= config.BOLT_COST
-        # Start the cast cooldown + animation.
-        self.cooldown = config.BOLT_COOLDOWN
-        self.anim = self.anim_len = 0.25
-        # Spawn the bolt slightly in front of the player so it doesn't self-collide.
-        spawn_x = player.x + math.cos(player.angle) * 0.4
-        spawn_y = player.y + math.sin(player.angle) * 0.4
-        bolt = Projectile(spawn_x, spawn_y, player.angle, self.bolt_sprite)
-        # Report the new projectile so game.py can track it.
-        return ("bolt", bolt)
+        if kind == "melee":
+            return {"kind": "melee", "damage": w["damage"],
+                    "range": w["range"], "arc": w["arc"]}
+
+        if kind == "projectile":
+            # Muzzle flash + spawn the orb just ahead of the player.
+            self.muzzle = config.MUZZLE_FLASH_TIME
+            sx = player.x + math.cos(player.angle) * 0.4
+            sy = player.y + math.sin(player.angle) * 0.4
+            proj = Projectile(sx, sy, player.angle, w["speed"], w["damage"],
+                              w["radius"], self.sprites["bolt"], "player",
+                              trail_color=(120, 200, 255))
+            return {"kind": "projectile", "proj": proj}
+
+        if kind == "hitscan":
+            self.muzzle = config.MUZZLE_FLASH_TIME
+            return {"kind": "hitscan", "damage": w["damage"],
+                    "pellets": w["pellets"], "spread": w["spread"], "range": w["range"]}
+
+        if kind == "beam":
+            self.muzzle = config.MUZZLE_FLASH_TIME * 3
+            return {"kind": "beam", "damage": w["damage"], "range": w["range"]}
+
+        return None
+
+    # ----- view-model drawing -----------------------------------------------
 
     def draw_viewmodel(self, screen):
-        """Draw the first-person weapon at the bottom of the screen."""
-        # The window dimensions, used to position the view-model.
+        """Draw the first-person weapon (with bob + animation + muzzle flash)."""
         w, h = screen.get_size()
-        # Animation progress 0..1 (1 right after firing, easing back to 0).
+        # Animation progress 0..1 (1 right after firing, easing to 0).
         t = (self.anim / self.anim_len) if self.anim_len > 0 else 0.0
-
+        # Bob offsets applied to the whole view-model.
+        bx, by = self.bob_x, self.bob_y
+        kind = config.WEAPONS[self.current]["kind"]
         if self.current == "sword":
-            self._draw_sword(screen, w, h, t)   # Draw the melee weapon.
-        else:
-            self._draw_staff(screen, w, h, t)   # Draw the magic staff.
+            self._draw_sword(screen, w, h, t, bx, by)
+        elif self.current == "bolt":
+            self._draw_staff(screen, w, h, t, bx, by)
+        elif self.current == "shotgun":
+            self._draw_shotgun(screen, w, h, t, bx, by)
+        elif self.current == "gatling":
+            self._draw_gatling(screen, w, h, t, bx, by)
+        elif self.current == "beam":
+            self._draw_beamgun(screen, w, h, t, bx, by)
 
-    def _draw_sword(self, screen, w, h, t):
-        """Draw the Holy Sword rising from the lower-right, swinging on fire."""
-        # The swing rotates the blade across the screen; map progress to an angle.
-        swing = math.sin(t * math.pi) * 0.9    # Smooth out-and-back swing arc.
-        # Base of the blade near the bottom-right of the screen.
-        base_x = w * 0.72                      # Horizontal anchor of the hilt.
-        base_y = h                              # Anchor at the very bottom edge.
-        # The blade tip position, swung left as `swing` grows.
-        tip_x = base_x - math.sin(swing) * w * 0.5    # Tip sweeps left during a swing.
-        tip_y = base_y - h * 0.7 - math.cos(swing) * 40  # Tip rises up the screen.
-        # Draw the wide steel blade as a thick line.
+    def _draw_sword(self, screen, w, h, t, bx, by):
+        """Holy Sword rising from the lower-right, swinging on fire."""
+        swing = math.sin(t * math.pi) * 0.9
+        base_x = w * 0.72 + bx
+        base_y = h + by
+        tip_x = base_x - math.sin(swing) * w * 0.5
+        tip_y = base_y - h * 0.7 - math.cos(swing) * 40
         pygame.draw.line(screen, (220, 230, 255), (base_x, base_y), (tip_x, tip_y), 14)
-        # A bright holy-glow core down the middle of the blade.
         pygame.draw.line(screen, (255, 255, 210), (base_x, base_y), (tip_x, tip_y), 5)
-        # The golden crossguard near the hilt (perpendicular short bar).
-        gx = base_x - math.sin(swing) * 40     # Crossguard center x.
-        gy = base_y - 90                        # Crossguard center y.
-        pygame.draw.line(screen, (255, 200, 60),
-                        (gx - 34, gy + 14), (gx + 34, gy - 14), 10)
-        # The dark hilt handle below the crossguard.
+        gx = base_x - math.sin(swing) * 40
+        gy = base_y - 90
+        pygame.draw.line(screen, (255, 200, 60), (gx - 34, gy + 14), (gx + 34, gy - 14), 10)
         pygame.draw.line(screen, (90, 50, 20), (base_x, base_y), (gx, gy), 12)
 
-    def _draw_staff(self, screen, w, h, t):
-        """Draw the Spirit staff in the lower-right with a charging orb."""
-        # A small recoil kick: the staff jolts up-left right after casting.
-        kick = math.sin(t * math.pi) * 30      # Recoil amount in pixels.
-        # The staff shaft, a thick diagonal line from bottom-right upward.
-        bottom = (w * 0.78, h)                 # Shaft base at the bottom edge.
-        top = (w * 0.6 - kick, h * 0.45 - kick)  # Shaft head, pulled by recoil.
-        pygame.draw.line(screen, (120, 80, 50), bottom, top, 12)   # Wooden shaft.
-        # The orb housing (a ring) at the head of the staff.
+    def _draw_staff(self, screen, w, h, t, bx, by):
+        """Spirit staff with a charging orb in the lower-right."""
+        kick = math.sin(t * math.pi) * 30
+        bottom = (w * 0.78 + bx, h + by)
+        top = (w * 0.6 - kick + bx, h * 0.45 - kick + by)
+        pygame.draw.line(screen, (120, 80, 50), bottom, top, 12)
         pygame.draw.circle(screen, (80, 60, 40), (int(top[0]), int(top[1])), 22, 5)
-        # The glowing orb; it brightens/grows briefly while casting.
-        glow = 12 + int(t * 8)                 # Orb radius pulses with the cast.
+        glow = 12 + int(t * 8)
         pygame.draw.circle(screen, (120, 200, 255), (int(top[0]), int(top[1])), glow)
         pygame.draw.circle(screen, (230, 245, 255), (int(top[0]), int(top[1])), glow // 2)
+
+    def _draw_shotgun(self, screen, w, h, t, bx, by):
+        """Twin-barrel seraph shotgun, recoiling on fire, with a muzzle flash."""
+        recoil = math.sin(t * math.pi) * 36
+        cx = w * 0.5 + bx
+        base_y = h - recoil + by
+        # Two stubby barrels.
+        pygame.draw.rect(screen, (210, 210, 220), (cx - 36, base_y - 150, 28, 150), border_radius=6)
+        pygame.draw.rect(screen, (210, 210, 220), (cx + 8, base_y - 150, 28, 150), border_radius=6)
+        # Wooden stock between/below.
+        pygame.draw.rect(screen, (120, 70, 30), (cx - 20, base_y - 70, 40, 90), border_radius=8)
+        # Golden seraph trim.
+        pygame.draw.rect(screen, (240, 200, 60), (cx - 40, base_y - 90, 80, 12), border_radius=4)
+        # Muzzle flash burst at the barrel tips.
+        if self.muzzle > 0:
+            for tip in (cx - 22, cx + 22):
+                pygame.draw.circle(screen, (255, 240, 160), (int(tip), int(base_y - 150)), 22)
+                pygame.draw.circle(screen, (255, 180, 60), (int(tip), int(base_y - 150)), 12)
+
+    def _draw_gatling(self, screen, w, h, t, bx, by):
+        """Spinning rosary gatling with a rapid muzzle flash."""
+        spin = self.bob_phase * 3
+        cx = w * 0.55 + bx
+        base_y = h + by
+        # The rotating barrel cluster (a few circles offset by the spin).
+        for i in range(4):
+            a = spin + i * (math.pi / 2)
+            ox = math.cos(a) * 12
+            pygame.draw.rect(screen, (90, 90, 100), (cx - 14 + ox, base_y - 140, 28, 140), border_radius=6)
+        pygame.draw.rect(screen, (60, 40, 20), (cx - 24, base_y - 60, 48, 80), border_radius=10)
+        # Rapid muzzle flash.
+        if self.muzzle > 0:
+            pygame.draw.circle(screen, (255, 240, 150), (int(cx), int(base_y - 140)), 20)
+            pygame.draw.circle(screen, (255, 170, 40), (int(cx), int(base_y - 140)), 10)
+
+    def _draw_beamgun(self, screen, w, h, t, bx, by):
+        """Goddess beam emitter; fires a bright vertical glow when shooting."""
+        cx = w * 0.5 + bx
+        base_y = h + by
+        # A crystalline emitter.
+        pygame.draw.polygon(screen, (120, 220, 255),
+                            [(cx - 30, base_y), (cx + 30, base_y),
+                             (cx + 18, base_y - 120), (cx - 18, base_y - 120)])
+        pygame.draw.circle(screen, (200, 245, 255), (int(cx), int(base_y - 120)), 18)
+        # The beam itself flares up the screen while firing.
+        if self.muzzle > 0:
+            beam = pygame.Surface((w, h), pygame.SRCALPHA)
+            alpha = int(180 * (self.muzzle / (config.MUZZLE_FLASH_TIME * 3)))
+            pygame.draw.line(beam, (180, 240, 255, alpha), (cx, base_y - 120), (w // 2, 0), 26)
+            pygame.draw.line(beam, (255, 255, 255, alpha), (cx, base_y - 120), (w // 2, 0), 10)
+            screen.blit(beam, (0, 0))
