@@ -22,6 +22,8 @@ class Player:
         self.armor = 0                   # Current armor (soaks part of damage).
         # Per-type ammunition, copied so we never mutate the config defaults.
         self.ammo = dict(config.START_AMMO)
+        # Keycards collected this level ("red"/"blue"/"yellow") for locked doors.
+        self.keys = set()
         self.dead = False                # Set True by combat when health hits 0.
         self.kills = 0                   # Lifetime kills (for stats).
         # Active powerup timers (seconds remaining; 0 = inactive).
@@ -40,6 +42,7 @@ class Player:
         self.mana = config.MAX_MANA      # Refill mana.
         self.armor = 0                   # No armor to start.
         self.ammo = dict(config.START_AMMO)  # Reset ammo to defaults.
+        self.keys = set()                # Drop keys between levels.
         self.dead = False                # Alive again.
         self.quad_timer = 0.0            # Clear powerups.
         self.haste_timer = 0.0

@@ -3,8 +3,9 @@
 A complete, from-scratch **Doom-style raycasting FPS written in pure Python**
 (only `pygame` + `numpy`). You died, got *isekai'd* by a goddess, and woke up in
 a labyrinth full of **anime demon-girls** who shout catchphrases at you. Fight
-through four levels with **five holy weapons**, survive ranged casters, tanky
-brutes, fast swarmers, and finally the **Demon Queen** boss — then escape.
+through **five levels** with **five holy weapons**, dodge lava, unlock doors
+with keycards, chain kill-combos, survive six enemy archetypes, and finally
+slay the **Demon Queen** boss — then escape.
 
 Every line of code is commented so you can follow exactly how the engine works.
 
@@ -37,10 +38,16 @@ On the title screen, pick a difficulty with **↑/↓** and press **Enter**.
 | `1` `2` `3` `4` `5` | Select weapon |
 | **Mouse Wheel** | Cycle weapons |
 | `Shift` | Sprint |
+| `Tab` | Toggle the fullscreen automap |
 | `M` | Mute / unmute |
 | `Esc` | Pause |
-| In pause: `Enter` resume · `R` restart level · `T` quit to title |
-| `Enter` | Confirm on menus |
+| `O` | Options (from title or pause) |
+| In pause: `Enter` resume · `R` restart level · `O` options · `T` quit to title |
+| `Enter` | Confirm on menus · `↑↓` select · `←→` change (options) |
+
+On the title screen, pick a **difficulty** (4 presets) with `↑/↓`. The game
+saves your **settings** (mouse sensitivity, SFX/music volume, FOV, minimap) and
+a **high-score** table to `isekai_save.json`.
 
 ---
 
@@ -66,10 +73,24 @@ Damage is multiplied while **Quad Damage** is active.
 | **Caster-chan** | Floats, keeps her distance, throws heart projectiles |
 | **Brute-chan** | Huge, slow, very tanky, heavy melee |
 | **Dasher-chan** | Tiny, winged, extremely fast swarmer |
+| **Bomber-chan** | Round kamikaze who rushes in and explodes (AoE) |
+| **Healer-chan** | Priestess who hangs back and heals nearby demon-girls |
 | **Demon Queen** | The boss: melee + fireball volleys + summons dashers |
 
 Each shouts original anime-style catchphrases when she spots you, attacks, or
 faints. Difficulty (4 presets) scales their health, damage, speed, and fire rate.
+
+## Levels & hazards
+
+1. **The Entry Labyrinth** — brick maze, auto-doors, imps.
+2. **The Flesh Catacombs** — organic walls, casters + brutes.
+3. **The Rune Sanctum** — dashers, casters, powerups.
+4. **The Molten Vault** — **lava** hazard floors that burn you, **keycards** +
+   **locked doors** (red/blue/yellow), bombers & healers.
+5. **Throne of the Demon Queen** — the boss arena finale.
+
+After each level a short **intermission** shows your kills, time, and score.
+Chaining quick kills builds a **combo multiplier** (up to ×8) for big points.
 
 ---
 
@@ -122,19 +143,22 @@ Doom-like/
 └── isekai_doom/
     ├── __init__.py         # Package docs + version
     ├── config.py           # Every tunable: resolution, weapons, enemies,
-    │                       #   powerups, doors, difficulty, colors, themes
-    ├── textures.py         # Procedural wall + floor/ceiling textures (numpy)
-    ├── sprites.py          # 5 enemy types, boss, projectiles, pickups, powerups
+    │                       #   powerups, doors, hazards, combo, difficulty, themes
+    ├── textures.py         # Procedural walls + floor/ceiling + lava + locked doors
+    ├── sprites.py          # 6 enemy types, boss, projectiles, pickups, keys, powerups
     ├── particles.py        # Blood/spark/trail/burst particle system
-    ├── audio.py            # Synthesized SFX + looping music
-    ├── maps.py             # Four level layouts + catchphrases + parser
+    ├── audio.py            # Synthesized SFX + 3 looping music tracks
+    ├── maps.py             # Five level layouts + catchphrases + parser
     ├── input.py            # Keyboard/mouse -> named actions
-    ├── player.py           # Position, movement, vitals, ammo, armor, powerups
-    ├── raycaster.py        # 3-D renderer: walls, floor/ceiling, sprites, particles
+    ├── player.py           # Position, movement, vitals, ammo, armor, keys, powerups
+    ├── raycaster.py        # 3-D renderer: walls, textured floor/ceiling, lava,
+    │                       #   sprites (cached + occluded), particles
     ├── weapon.py           # 5 weapons, projectiles, bob, muzzle flash, view-models
-    ├── enemy.py            # Enemy archetypes, AI, ranged attacks, boss, summons
-    ├── hud.py              # HUD, minimap, boss bar, powerup chips, menus
-    └── game.py             # State machine + main loop (combat, doors, fx, music)
+    ├── enemy.py            # 6 archetypes + boss: AI, ranged, bombers, healers, summons
+    ├── persist.py          # JSON save file for settings + high scores
+    ├── hud.py              # HUD, minimap, automap, boss bar, combo, keys, menus
+    └── game.py             # State machine + main loop (combat, doors, hazards,
+                            #   combo, intermission, options, music)
 ```
 
 ---

@@ -149,17 +149,39 @@ def _boss_wall():
     return _to_surface(arr)
 
 
+def _locked_door(tint):
+    """A metal door painted in a key color (red/blue/yellow) with a keyhole."""
+    arr = _new_array()
+    xs, ys = _coords()
+    base = 70 + (np.sin(ys * 0.6) * 0.5 + 0.5) * 20        # Brushed sheen.
+    # Wash the metal toward the key color so it reads as a colored lock door.
+    arr[..., 0] = base * 0.4 + tint[0] * 0.5
+    arr[..., 1] = base * 0.4 + tint[1] * 0.5
+    arr[..., 2] = base * 0.4 + tint[2] * 0.5
+    seam = np.abs(xs - 32) < 2                             # Central seam.
+    arr[seam] = 15
+    # A bright keyhole emblem in the middle of each leaf.
+    emblem = (((xs % 32) - 16) ** 2 + ((ys - 30) ** 2)) < 16
+    arr[emblem, 0] = min(255, tint[0] + 80)
+    arr[emblem, 1] = min(255, tint[1] + 80)
+    arr[emblem, 2] = min(255, tint[2] + 80)
+    return _to_surface(arr)
+
+
 def build_textures():
     """Return the wall texture list, indexed by wall id (0 = None/empty)."""
     return [
-        None,            # 0: empty / walkable.
-        _brick(),        # 1: brick.
-        _flesh(),        # 2: flesh.
-        _rune(),         # 3: rune stone.
-        _exit_portal(),  # 4: exit portal.
-        _door(),         # 5: sliding door.
-        _metal(),        # 6: metal panel.
-        _boss_wall(),    # 7: boss-arena wall.
+        None,                              # 0: empty / walkable.
+        _brick(),                          # 1: brick.
+        _flesh(),                          # 2: flesh.
+        _rune(),                           # 3: rune stone.
+        _exit_portal(),                    # 4: exit portal.
+        _door(),                           # 5: sliding door.
+        _metal(),                          # 6: metal panel.
+        _boss_wall(),                      # 7: boss-arena wall.
+        _locked_door((200, 40, 50)),       # 8: red locked door.
+        _locked_door((50, 90, 220)),       # 9: blue locked door.
+        _locked_door((220, 190, 40)),      # 10: yellow locked door.
     ]
 
 
@@ -230,6 +252,20 @@ def _ceil_flesh():
     return np.clip(arr, 0, 255).astype(np.uint8)
 
 
+def _floor_lava():
+    """Glowing molten lava floor (a hazard)."""
+    arr = _flat_array(); xs, ys = _flat_coords()
+    flow = (np.sin(xs * 0.3 + ys * 0.2) * np.cos(ys * 0.4) * 0.5 + 0.5)   # Molten flow.
+    crust = (np.sin(xs * 0.8) * np.sin(ys * 0.8) > 0.4)                    # Dark crust veins.
+    arr[..., 0] = 180 + flow * 70           # Hot red-orange.
+    arr[..., 1] = 40 + flow * 110
+    arr[..., 2] = 10 + flow * 20
+    arr[crust, 0] *= 0.35                    # Darken the crust.
+    arr[crust, 1] *= 0.25
+    arr[crust, 2] *= 0.35
+    return np.clip(arr, 0, 255).astype(np.uint8)
+
+
 def _ceil_void():
     """Starry void ceiling for the sanctum/boss arena."""
     arr = _flat_array(); xs, ys = _flat_coords()
@@ -245,6 +281,7 @@ def build_flats():
         "stone": _floor_stone(),     # Level 1 floor.
         "blood": _floor_blood(),     # Level 2 floor.
         "rune": _floor_rune(),       # Level 3/4 floor.
+        "lava": _floor_lava(),       # Hazard floor (also used as a theme floor).
     }
     ceils = {
         "cave": _ceil_cave(),        # Level 1 ceiling.

@@ -244,7 +244,8 @@ LEVEL_THEMES = [
     {"floor": "stone", "ceil": "cave",  "fog": (12, 6, 14)},   # Level 1: brick labyrinth.
     {"floor": "blood", "ceil": "flesh", "fog": (20, 4, 8)},    # Level 2: flesh catacombs.
     {"floor": "rune",  "ceil": "void",  "fog": (8, 4, 20)},    # Level 3: rune sanctum.
-    {"floor": "rune",  "ceil": "void",  "fog": (16, 0, 16)},   # Level 4: boss arena.
+    {"floor": "stone", "ceil": "cave",  "fog": (26, 8, 4)},    # Level 4: molten vault.
+    {"floor": "rune",  "ceil": "void",  "fog": (16, 0, 16)},   # Level 5: boss arena.
 ]
 
 # ----------------------------------------------------------------------------
@@ -255,6 +256,36 @@ TEX_BRICK = 1                # Demonic brick.
 TEX_FLESH = 2                # Organic flesh wall.
 TEX_RUNE = 3                 # Glowing rune stone.
 TEX_EXIT = 4                 # The level-exit portal.
-TEX_DOOR = 5                 # A sliding door.
+TEX_DOOR = 5                 # A plain sliding door (auto-opens).
 TEX_METAL = 6                # Metal/tech panel wall.
 TEX_BOSS = 7                 # Ornate boss-arena wall.
+TEX_DOOR_RED = 8             # Locked door (needs the red key).
+TEX_DOOR_BLUE = 9            # Locked door (needs the blue key).
+TEX_DOOR_YELLOW = 10         # Locked door (needs the yellow key).
+
+# All tile ids that behave like doors (use the door open/close + slide logic).
+DOOR_TILES = {TEX_DOOR, TEX_DOOR_RED, TEX_DOOR_BLUE, TEX_DOOR_YELLOW}
+# Which key color each locked-door tile requires.
+LOCKED_DOOR_KEY = {TEX_DOOR_RED: "red", TEX_DOOR_BLUE: "blue", TEX_DOOR_YELLOW: "yellow"}
+
+# ----------------------------------------------------------------------------
+# Hazard floors (lava) — damage the player while standing on them.
+# ----------------------------------------------------------------------------
+HAZARD_DPS = 14.0            # Damage per second while standing in lava.
+
+# ----------------------------------------------------------------------------
+# Score combo — consecutive quick kills multiply the points earned.
+# ----------------------------------------------------------------------------
+COMBO_WINDOW = 2.5           # Seconds before the kill combo resets.
+COMBO_MAX = 8                # Maximum combo multiplier.
+
+# ----------------------------------------------------------------------------
+# Default user settings (persisted to settings.json; tweakable in Options).
+# ----------------------------------------------------------------------------
+DEFAULT_SETTINGS = {
+    "mouse_sensitivity": MOUSE_SENSITIVITY,  # Radians per pixel.
+    "master_volume": 0.35,                   # 0..1 master mixer volume.
+    "music_volume": 0.22,                    # 0..1 music volume.
+    "fov_degrees": 60,                       # Field of view in degrees.
+    "show_minimap": True,                    # Draw the minimap HUD element.
+}

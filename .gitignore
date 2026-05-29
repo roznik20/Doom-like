@@ -8,6 +8,9 @@ venv/
 .venv/
 env/
 
+# Local save file (settings + high scores)
+isekai_save.json
+
 # OS / editor cruft
 .DS_Store
 *.swp

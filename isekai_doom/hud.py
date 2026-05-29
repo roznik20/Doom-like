@@ -114,11 +114,23 @@ class HUD:
         # Level name (top-left).
         self._text(screen, self.font_small, state["level_name"], (210, 190, 190), 14, 12, center=False)
 
+        # Combo multiplier (shown under the score when active).
+        if state.get("combo_mult", 1) > 1:
+            self._text(screen, self.font_mid, "COMBO x{}".format(state["combo_mult"]),
+                      (255, 140, 60), w - 150, base_y + 58, center=False)
+
+        # Held keycards (top-left, under the level name).
+        self._keys(screen, state.get("keys", set()))
+
         # Active powerup timers.
         self._powerups(screen, player, w)
 
-        # Live minimap (top-right).
-        self._minimap(screen, state, w)
+        # Damage-direction indicators around the crosshair.
+        self._damage_indicators(screen, state.get("damage_dirs", []), player, cx, cy)
+
+        # Live minimap (top-right), if enabled in options.
+        if state.get("show_minimap", True):
+            self._minimap(screen, state, w)
 
         # Boss health bar (top-center) when a boss is present + awake.
         boss = state.get("boss")
@@ -222,6 +234,92 @@ class HUD:
         r = (px + math.cos(a - 2.5) * 5, py + math.sin(a - 2.5) * 5)
         pygame.draw.polygon(screen, CYAN, [tip, l, r])
 
+    def _keys(self, screen, keys):
+        """Draw little colored key icons for each keycard the player holds."""
+        colors = {"red": (230, 50, 60), "blue": (60, 110, 240), "yellow": (235, 200, 50)}
+        x = 14
+        for i, color in enumerate(["red", "blue", "yellow"]):
+            if color in keys:
+                kx = x + i * 22
+                pygame.draw.circle(screen, colors[color], (kx + 6, 36), 5, 2)   # Bow.
+                pygame.draw.line(screen, colors[color], (kx + 10, 36), (kx + 18, 36), 3)  # Shaft.
+
+    def _damage_indicators(self, screen, dirs, player, cx, cy):
+        """Draw fading red arcs around the crosshair pointing at recent threats."""
+        for ang, t in dirs:
+            # Convert the world angle to one relative to where the player looks.
+            rel = ang - player.angle
+            # Place an arrow on a ring around the crosshair at that relative angle.
+            ring = 70
+            ax = cx + math.cos(rel) * ring
+            ay = cy + math.sin(rel) * ring
+            # Build a small triangle pointing outward, fading with the timer.
+            alpha = max(0, min(255, int(220 * t)))
+            tip = (ax + math.cos(rel) * 12, ay + math.sin(rel) * 12)
+            l = (ax + math.cos(rel + 2.4) * 10, ay + math.sin(rel + 2.4) * 10)
+            r = (ax + math.cos(rel - 2.4) * 10, ay + math.sin(rel - 2.4) * 10)
+            surf = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            pygame.draw.polygon(surf, (255, 40, 40, alpha), [tip, l, r])
+            screen.blit(surf, (0, 0))
+
+    def draw_lava_tint(self, screen):
+        """An orange pulsing vignette while the player stands in lava."""
+        w, h = screen.get_size()
+        tint = pygame.Surface((w, h), pygame.SRCALPHA)
+        tint.fill((255, 90, 20, 40))
+        screen.blit(tint, (0, 0))
+
+    def draw_full_map(self, screen, level, player, enemies, pickups):
+        """A large centered automap overlay (toggled with Tab)."""
+        self._dim(screen, 200)
+        w, h = screen.get_size()
+        # Choose a tile size that fits the map nicely on screen.
+        ts = min((w - 120) // level["width"], (h - 140) // level["height"])
+        ts = max(6, ts)
+        mw = level["width"] * ts
+        mh = level["height"] * ts
+        ox = (w - mw) // 2
+        oy = (h - mh) // 2 + 10
+        self._text(screen, self.font_big, "AUTOMAP", GOLD, w // 2, oy - 26)
+        grid = level["grid"]
+        for y in range(level["height"]):
+            for x in range(level["width"]):
+                t = grid[y][x]
+                if t == 0:
+                    if level.get("hazard_grid") is not None and level["hazard_grid"][y][x]:
+                        pygame.draw.rect(screen, (200, 80, 20), (ox + x * ts, oy + y * ts, ts - 1, ts - 1))
+                    continue
+                if t == config.TEX_EXIT:
+                    col = GREEN
+                elif t in config.DOOR_TILES:
+                    col = GOLD
+                else:
+                    col = (110, 110, 130)
+                pygame.draw.rect(screen, col, (ox + x * ts, oy + y * ts, ts - 1, ts - 1))
+        for p in pickups:
+            pygame.draw.circle(screen, (255, 220, 120), (ox + int(p["x"] * ts), oy + int(p["y"] * ts)), max(2, ts // 4))
+        for e in enemies:
+            col = RED if e.alive else (90, 60, 60)
+            pygame.draw.circle(screen, col, (ox + int(e.x * ts), oy + int(e.y * ts)), max(2, ts // 3))
+        px = ox + player.x * ts; py = oy + player.y * ts
+        a = player.angle
+        pygame.draw.polygon(screen, CYAN, [
+            (px + math.cos(a) * ts, py + math.sin(a) * ts),
+            (px + math.cos(a + 2.5) * ts * 0.8, py + math.sin(a + 2.5) * ts * 0.8),
+            (px + math.cos(a - 2.5) * ts * 0.8, py + math.sin(a - 2.5) * ts * 0.8),
+        ])
+        self._text(screen, self.font_small, "Tab — close", (200, 200, 210), w // 2, oy + mh + 20)
+
+    def _scores_block(self, screen, highscores, cx, y):
+        """Draw a compact high-score list centered on cx starting at y."""
+        self._text(screen, self.font_mid, "— HIGH SCORES —", GOLD, cx, y)
+        if not highscores:
+            self._text(screen, self.font_small, "(none yet — be the first!)", (190, 190, 200), cx, y + 26)
+            return
+        for i, s in enumerate(highscores[:5]):
+            line = "{}. {:>7}  {}".format(i + 1, s["score"], s.get("difficulty", ""))
+            self._text(screen, self.font_small, line, WHITE, cx, y + 26 + i * 20)
+
     # ----- overlays ----------------------------------------------------------
 
     def _dim(self, screen, alpha=200):
@@ -231,54 +329,95 @@ class HUD:
         overlay.fill((12, 4, 8, alpha))
         screen.blit(overlay, (0, 0))
 
-    def draw_title(self, screen, difficulty_names, sel_index):
-        """Title screen with a navigable difficulty selector."""
+    def draw_title(self, screen, difficulty_names, sel_index, highscores=None):
+        """Title screen with a navigable difficulty selector + high scores."""
         self._dim(screen, 235)
         w, h = screen.get_size()
-        self._text(screen, self.font_huge, "ISEKAI DOOM", PINK, w // 2, h * 0.16, glow=(120, 0, 40))
-        self._text(screen, self.font_big, "Reborn in the Demon World", GOLD, w // 2, h * 0.16 + 60)
-        lore = [
-            "You died in a traffic accident. A goddess gave you a second life...",
-            "...then dropped you in a labyrinth of anime demon-girls. Five holy",
-            "weapons. Four levels. One Demon Queen. Escape — or be moe'd to death.",
-        ]
-        for i, line in enumerate(lore):
-            self._text(screen, self.font_small, line, (210, 190, 190), w // 2, h * 0.34 + i * 22)
-        # Difficulty selector.
-        self._text(screen, self.font_mid, "CHOOSE YOUR FATE  (↑/↓)", CYAN, w // 2, h * 0.5)
+        self._text(screen, self.font_huge, "ISEKAI DOOM", PINK, w // 2, h * 0.13, glow=(120, 0, 40))
+        self._text(screen, self.font_big, "Reborn in the Demon World", GOLD, w // 2, h * 0.13 + 54)
+        # Difficulty selector (left column).
+        self._text(screen, self.font_mid, "CHOOSE YOUR FATE  (↑/↓)", CYAN, w * 0.3, h * 0.34)
         for i, name in enumerate(difficulty_names):
             selected = (i == sel_index)
             color = WHITE if selected else (150, 150, 160)
             label = (">  " + name + "  <") if selected else name
             self._text(screen, self.font_big if selected else self.font_mid, label, color,
-                      w // 2, h * 0.56 + i * 34, glow=PINK if selected else None)
-        self._text(screen, self.font_big, "PRESS  ENTER  TO  BEGIN", WHITE, w // 2, h * 0.84, glow=PINK)
-        controls = "WASD move  Mouse/Arrows look  Click/Space fire  1-5 weapons  Wheel cycle  Shift run  M mute  Esc pause"
-        self._text(screen, self.font_tiny, controls, (180, 180, 200), w // 2, h * 0.94)
+                      w * 0.3, h * 0.40 + i * 34, glow=PINK if selected else None)
+        # High scores (right column).
+        if highscores is not None:
+            self._scores_block(screen, highscores, w * 0.72, h * 0.36)
+        self._text(screen, self.font_big, "ENTER — Begin      O — Options", WHITE, w // 2, h * 0.82, glow=PINK)
+        controls = "WASD move  Mouse/Arrows look  Click/Space fire  1-5 weapons  Wheel cycle  Shift run  Tab map  M mute  Esc pause"
+        self._text(screen, self.font_tiny, controls, (180, 180, 200), w // 2, h * 0.93)
+
+    def draw_options(self, screen, options, settings, sel_index):
+        """Options menu: adjust each setting with ←/→."""
+        self._dim(screen, 230)
+        w, h = screen.get_size()
+        self._text(screen, self.font_huge, "OPTIONS", GOLD, w // 2, h * 0.18)
+        self._text(screen, self.font_small, "↑/↓ select    ←/→ change    Enter/Esc back", CYAN, w // 2, h * 0.28)
+        for i, (key, label, step, lo, hi, is_bool) in enumerate(options):
+            selected = (i == sel_index)
+            val = settings[key]
+            if is_bool:
+                shown = "ON" if val else "OFF"
+            elif key == "mouse_sensitivity":
+                shown = "{:.4f}".format(val)
+            elif key == "fov_degrees":
+                shown = "{}°".format(int(val))
+            else:
+                shown = "{:.0f}%".format(val * 100)
+            color = WHITE if selected else (160, 160, 170)
+            prefix = "> " if selected else "  "
+            line = "{}{:<20}  < {} >".format(prefix, label, shown)
+            self._text(screen, self.font_big if selected else self.font_mid, line, color,
+                      w // 2, h * 0.4 + i * 40, glow=PINK if selected else None)
+
+    def draw_intermission(self, screen, info):
+        """Between-levels stats summary."""
+        self._dim(screen, 220)
+        w, h = screen.get_size()
+        self._text(screen, self.font_huge, "LEVEL CLEARED", GREEN, w // 2, h * 0.22, glow=(20, 80, 30))
+        self._text(screen, self.font_big, info.get("level", ""), GOLD, w // 2, h * 0.22 + 56)
+        mins = int(info.get("time", 0) // 60)
+        secs = int(info.get("time", 0) % 60)
+        lines = [
+            "Demon-girls defeated:  {} / {}".format(info.get("kills", 0), info.get("total", 0)),
+            "Time:  {:d}:{:02d}".format(mins, secs),
+            "Total score:  {}".format(info.get("score", 0)),
+        ]
+        for i, line in enumerate(lines):
+            self._text(screen, self.font_mid, line, WHITE, w // 2, h * 0.46 + i * 34)
+        self._text(screen, self.font_big, "ENTER — Continue", WHITE, w // 2, h * 0.74, glow=PINK)
 
     def draw_pause(self, screen):
         """Pause overlay."""
         self._dim(screen)
         w, h = screen.get_size()
-        self._text(screen, self.font_huge, "PAUSED", GOLD, w // 2, h // 3)
-        self._text(screen, self.font_big, "ENTER / Esc — Resume", WHITE, w // 2, h // 2)
-        self._text(screen, self.font_big, "R — Restart Level", WHITE, w // 2, h // 2 + 44)
-        self._text(screen, self.font_big, "T — Quit to Title", WHITE, w // 2, h // 2 + 88)
+        self._text(screen, self.font_huge, "PAUSED", GOLD, w // 2, h // 4)
+        self._text(screen, self.font_big, "ENTER / Esc — Resume", WHITE, w // 2, h * 0.46)
+        self._text(screen, self.font_big, "R — Restart Level", WHITE, w // 2, h * 0.46 + 42)
+        self._text(screen, self.font_big, "O — Options", WHITE, w // 2, h * 0.46 + 84)
+        self._text(screen, self.font_big, "T — Quit to Title", WHITE, w // 2, h * 0.46 + 126)
 
-    def draw_gameover(self, screen, stats):
+    def draw_gameover(self, screen, stats, highscores=None):
         """Death screen."""
         self._dim(screen)
         w, h = screen.get_size()
-        self._text(screen, self.font_huge, "YOU DIED", RED, w // 2, h // 3, glow=(120, 0, 0))
-        self._text(screen, self.font_big, "The demon-girls got you...", PINK, w // 2, h // 3 + 60)
-        self._text(screen, self.font_mid, stats, WHITE, w // 2, h // 2 + 20)
-        self._text(screen, self.font_big, "ENTER — Try Again", WHITE, w // 2, h * 0.72, glow=PINK)
+        self._text(screen, self.font_huge, "YOU DIED", RED, w // 2, h // 5, glow=(120, 0, 0))
+        self._text(screen, self.font_big, "The demon-girls got you...", PINK, w // 2, h // 5 + 56)
+        self._text(screen, self.font_mid, stats, WHITE, w // 2, h * 0.42)
+        if highscores is not None:
+            self._scores_block(screen, highscores, w // 2, h * 0.5)
+        self._text(screen, self.font_big, "ENTER — Try Again     T — Title", WHITE, w // 2, h * 0.86, glow=PINK)
 
-    def draw_victory(self, screen, stats):
+    def draw_victory(self, screen, stats, highscores=None):
         """Victory screen."""
         self._dim(screen)
         w, h = screen.get_size()
-        self._text(screen, self.font_huge, "YOU ESCAPED!", CYAN, w // 2, h // 3, glow=(40, 80, 160))
-        self._text(screen, self.font_big, "The goddess smiles upon you.", GOLD, w // 2, h // 3 + 60)
-        self._text(screen, self.font_mid, stats, WHITE, w // 2, h // 2 + 20)
-        self._text(screen, self.font_big, "ENTER — Play Again", WHITE, w // 2, h * 0.72, glow=CYAN)
+        self._text(screen, self.font_huge, "YOU ESCAPED!", CYAN, w // 2, h // 5, glow=(40, 80, 160))
+        self._text(screen, self.font_big, "The goddess smiles upon you.", GOLD, w // 2, h // 5 + 56)
+        self._text(screen, self.font_mid, stats, WHITE, w // 2, h * 0.42)
+        if highscores is not None:
+            self._scores_block(screen, highscores, w // 2, h * 0.5)
+        self._text(screen, self.font_big, "ENTER — Play Again     T — Title", WHITE, w // 2, h * 0.86, glow=CYAN)

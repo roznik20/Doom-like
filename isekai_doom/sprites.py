@@ -206,6 +206,66 @@ def _draw_dasher(pal, pose):
 
 
 # ---------------------------------------------------------------------------
+# Enemy type 5 — Bomber-chan (round kamikaze who rushes in and explodes)
+# ---------------------------------------------------------------------------
+
+def _draw_bomber(pal, pose):
+    surf = _blank(88, 112); cx = 44
+    if pose == "dead":
+        return _dead_frame(88, 112, pal)
+    # A round, bomb-like body.
+    pygame.draw.circle(surf, pal["dress"], (cx, 70), 28)
+    # The glowing volatile core (brighter/larger when about to detonate).
+    core = 16 if pose == "attack" else 10
+    glow = (255, 120, 40) if pose == "attack" else (255, 80, 80)
+    pygame.draw.circle(surf, glow, (cx, 70), core)
+    pygame.draw.circle(surf, (255, 240, 180), (cx, 70), core // 2)
+    # A lit fuse on top with a spark.
+    pygame.draw.line(surf, (60, 40, 20), (cx, 44), (cx + 8, 30), 3)
+    pygame.draw.circle(surf, (255, 220, 80), (cx + 8, 28), 4)
+    # Tiny panicked arms + legs.
+    pygame.draw.line(surf, pal["skin"], (cx - 24, 66), (cx - 34, 54 if pose == "attack" else 74), 5)
+    pygame.draw.line(surf, pal["skin"], (cx + 24, 66), (cx + 34, 54 if pose == "attack" else 74), 5)
+    pygame.draw.line(surf, pal["skin"], (cx - 10, 96), (cx - 12, 110), 5)
+    pygame.draw.line(surf, pal["skin"], (cx + 10, 96), (cx + 12, 110), 5)
+    # Worried little face + tiny horns.
+    _face(surf, cx, 40, 16, pal, "idle", fang=False)
+    _horns(surf, cx, 26, 6, pal["horn"])
+    return surf
+
+
+# ---------------------------------------------------------------------------
+# Enemy type 6 — Healer-chan (priestess who heals nearby demon-girls)
+# ---------------------------------------------------------------------------
+
+def _draw_healer(pal, pose):
+    surf = _blank(96, 140); cx = 48
+    if pose == "dead":
+        return _dead_frame(96, 140, pal)
+    # Long priestess robe (white-trimmed dress).
+    pygame.draw.polygon(surf, (235, 235, 245), [(cx - 12, 60), (cx + 12, 60), (cx + 26, 122), (cx - 26, 122)])
+    pygame.draw.polygon(surf, pal["dress"], [(cx - 8, 64), (cx + 8, 64), (cx + 16, 118), (cx - 16, 118)])
+    # A healing staff with a green cross; it glows when casting.
+    sx_top = cx + 28
+    pygame.draw.line(surf, (200, 200, 210), (cx + 12, 66), (sx_top, 26), 4)
+    cross = 12 if pose == "attack" else 8
+    col = (80, 255, 140) if pose == "attack" else (120, 230, 160)
+    pygame.draw.line(surf, col, (sx_top - cross, 24), (sx_top + cross, 24), 4)   # Cross bar.
+    pygame.draw.line(surf, col, (sx_top, 24 - cross), (sx_top, 24 + cross), 4)   # Cross stem.
+    pygame.draw.circle(surf, (200, 255, 220), (sx_top, 24), 4)
+    # Arms.
+    pygame.draw.line(surf, pal["skin"], (cx + 6, 64), (cx + 12, 66), 5)
+    pygame.draw.line(surf, pal["skin"], (cx - 6, 64), (cx - 16, 78), 5)
+    # Hair + face + a glowing halo above the head.
+    pygame.draw.ellipse(surf, pal["hair"], (cx - 24, 30, 14, 46))
+    pygame.draw.ellipse(surf, pal["hair"], (cx + 10, 30, 14, 46))
+    _face(surf, cx, 40, 20, pal, "idle")
+    pygame.draw.ellipse(surf, (255, 255, 180), (cx - 16, 10, 32, 8), 2)          # Halo.
+    _horns(surf, cx, 22, 6, pal["horn"])
+    return surf
+
+
+# ---------------------------------------------------------------------------
 # Boss — the Demon Queen (huge, winged, crowned, throws fireballs)
 # ---------------------------------------------------------------------------
 
@@ -272,6 +332,8 @@ def build_all_enemy_sprites():
     out["caster"] = [_make_set(_draw_caster, p) for p in PALETTES]  # Ranged mage.
     out["brute"] = [_make_set(_draw_brute, p) for p in PALETTES]    # Tank.
     out["dasher"] = [_make_set(_draw_dasher, p) for p in PALETTES]  # Fast swarmer.
+    out["bomber"] = [_make_set(_draw_bomber, p) for p in PALETTES]  # Kamikaze.
+    out["healer"] = [_make_set(_draw_healer, p) for p in PALETTES]  # Support medic.
     # Boss: build its frames with the fixed boss palette.
     out["boss"] = [{
         "walk": [_draw_boss("idle"), _draw_boss("step")],
@@ -380,5 +442,14 @@ def build_pickup_sprites():
     pygame.draw.circle(sh, (200, 230, 255), (22, 24), 16, 4)
     pygame.draw.circle(sh, (255, 255, 255), (22, 16), 5)
     out["shield"] = sh
+
+    # Keycards (red / blue / yellow) — small keys for locked doors.
+    for kind, col in (("key_red", (230, 50, 60)), ("key_blue", (60, 110, 240)), ("key_yellow", (235, 200, 50))):
+        k = _blank(36, 36)
+        pygame.draw.circle(k, col, (12, 18), 8, 3)            # Key bow (ring).
+        pygame.draw.line(k, col, (18, 18), (30, 18), 4)       # Key shaft.
+        pygame.draw.line(k, col, (28, 18), (28, 24), 4)       # A tooth.
+        pygame.draw.line(k, col, (24, 18), (24, 23), 3)       # Another tooth.
+        out[kind] = k
 
     return out

@@ -212,6 +212,17 @@ class SoundBank:
             (0.0, self._tone(140, 70, 1.0, 0.3, "square")),
             (0.0, self._noise(1.0, 0.15)),
         ])
+        # Bomber detonation: a punchy explosion (low boom + big noise burst).
+        self.sounds["explode"] = self._compose([
+            (0.0, self._tone(160, 40, 0.5, 0.55, "sawtooth")),
+            (0.0, self._noise(0.5, 0.5)),
+            (0.0, self._tone(90, 30, 0.6, 0.4, "square")),
+        ])
+        # Locked door rattle when you lack the key.
+        self.sounds["locked"] = self._compose([
+            (0.0, self._tone(150, 100, 0.08, 0.3, "square")),
+            (0.1, self._tone(130, 90, 0.08, 0.3, "square")),
+        ])
 
     # ----- music ------------------------------------------------------------
 
@@ -250,6 +261,17 @@ class SoundBank:
             seg2.append((i * beat, self._tone(n, n, beat * 0.9, 0.16, "triangle")))
         self.music["menu"] = self._compose(seg2)
 
+        # --- Boss theme: faster, heavier, ominous over 8 beats ---
+        beat_b = 60.0 / 168.0                     # 168 BPM (more frantic).
+        seg3 = []
+        bboss = [A2, A2, A2, G3, F3, F3, E3, E3]  # Pounding low bass.
+        for i, n in enumerate(bboss):
+            seg3.append((i * beat_b, self._tone(n, n, beat_b * 0.95, 0.32, "sawtooth")))
+        lboss = [A4, A4, G4, A4, F4, G4, E4, F4, D4, E4, C4, D4, A3, C4, E4, A4]
+        for i, n in enumerate(lboss):             # Driving sixteenth-ish lead.
+            seg3.append((i * beat_b / 2, self._tone(n, n, beat_b * 0.4, 0.16, "square")))
+        self.music["boss"] = self._compose(seg3)
+
     def play_music(self, name):
         """Loop a named music track on a reserved channel."""
         if not self.enabled or not hasattr(self, "music") or name not in self.music:
@@ -275,8 +297,18 @@ class SoundBank:
         # Do nothing if audio is off, muted, or the sound wasn't built.
         if not self.enabled or self.muted or name not in self.sounds:
             return
-        # Play the sound once on any free channel.
-        self.sounds[name].play()
+        # Play the sound once on any free channel and set its volume.
+        ch = self.sounds[name].play()
+        if ch:
+            ch.set_volume(getattr(self, "sfx_volume", 0.6))
+
+    def set_volumes(self, sfx_volume, music_volume):
+        """Update SFX + music volumes (0..1) from the settings."""
+        self.sfx_volume = sfx_volume               # Applied to each new SFX play.
+        self.music_vol = music_volume              # Base music volume.
+        # Reflect the music change live on the looping channel.
+        if getattr(self, "music_channel", None) and not self.muted:
+            self.music_channel.set_volume(self.music_vol)
 
     def toggle_mute(self):
         """Flip the mute flag (also muting/unmuting the music) and return it."""

@@ -46,6 +46,8 @@ class Raycaster:
         self._fog = np.array(config.COLOR_FOG, dtype=np.float32)
         # Cache of scaled sprite surfaces keyed by (sprite id, width, height).
         self._sprite_cache = {}
+        # Lava texture used for hazard floor cells (set by the game).
+        self.lava_tex = None
 
     def set_theme(self, floor_tex, ceil_tex, fog):
         """Swap the floor/ceiling textures and fog color (called per level)."""
@@ -55,12 +57,14 @@ class Raycaster:
 
     # ----- floor + ceiling casting ------------------------------------------
 
-    def _cast_floor_ceiling(self, player, dirx, diry, planex, planey):
+    def _cast_floor_ceiling(self, player, level, dirx, diry, planex, planey):
         """Fill the background buffer with textured floor + ceiling, then blit it.
 
         Fully vectorized: instead of looping over rows in Python, we build 2D
         (column x row) coordinate arrays and sample the textures in a single
-        numpy fancy-index, which is dramatically faster.
+        numpy fancy-index, which is dramatically faster. Hazard (lava) cells are
+        overlaid by sampling the lava texture only where the floor cell is a
+        hazard (via a precomputed boolean grid on the level).
         """
         H = config.RENDER_HEIGHT
         W = config.RENDER_WIDTH
@@ -95,6 +99,19 @@ class Raycaster:
         # Sample + fog-blend the floor and ceiling in one shot each.
         floor_px = self.floor_tex[ty, tx].astype(np.float32) * shade + fog * (1 - shade)
         ceil_px = self.ceil_tex[ty, tx].astype(np.float32) * shade + fog * (1 - shade)
+
+        # Overlay lava on hazard floor cells (only if this level has any).
+        hazard_grid = level.get("hazard_grid") if level else None
+        if hazard_grid is not None and self.lava_tex is not None:
+            gh, gw = hazard_grid.shape
+            cellx = np.clip(fx.astype(np.int32), 0, gw - 1)   # World cell x per pixel.
+            celly = np.clip(fy.astype(np.int32), 0, gh - 1)   # World cell y per pixel.
+            mask = hazard_grid[celly, cellx]                  # (W,P) bool: is it lava?
+            if mask.any():
+                # Lava glows, so apply far less fog than normal floors.
+                lava_shade = np.clip(shade + 0.4, 0, 1)
+                lava_px = self.lava_tex[ty, tx].astype(np.float32) * lava_shade + fog * (1 - lava_shade)
+                floor_px = np.where(mask[..., None], lava_px, floor_px)
 
         # Write the floor rows (horizon+1 .. horizon+P) and mirrored ceiling rows.
         bg[:, horizon + 1:horizon + 1 + P, :] = floor_px.astype(np.uint8)
@@ -338,7 +355,7 @@ class Raycaster:
         planey = math.cos(player.angle) * config.PLANE_LENGTH
 
         # 1) Textured floor + ceiling background.
-        self._cast_floor_ceiling(player, dirx, diry, planex, planey)
+        self._cast_floor_ceiling(player, level, dirx, diry, planex, planey)
         # 2) Textured walls over the background.
         self._cast_walls(player, level, dirx, diry, planex, planey)
         # 3) Sprites (enemies, pickups, projectiles) with z-buffer occlusion.

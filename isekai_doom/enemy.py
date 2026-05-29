@@ -44,6 +44,16 @@ ENEMY_TYPES = {
         "hp": 45, "speed": 2.9, "melee_dmg": 8, "atk_range": 0.9, "atk_cd": 0.8,
         "ranged": False, "score": 120, "vscale": 0.8, "radius": 0.26,
     },
+    "bomber": {
+        "hp": 50, "speed": 2.4, "melee_dmg": 0, "atk_range": 1.1, "atk_cd": 1.0,
+        "ranged": False, "score": 130, "vscale": 0.85, "radius": 0.3,
+        "is_bomber": True, "explode_dmg": 36, "explode_radius": 1.8,
+    },
+    "healer": {
+        "hp": 90, "speed": 1.2, "melee_dmg": 0, "atk_range": 1.0, "atk_cd": 1.0,
+        "ranged": False, "score": 200, "vscale": 0.95, "radius": 0.3,
+        "is_healer": True, "heal_amount": 28, "heal_interval": 3.0, "heal_radius": 5.5,
+    },
     "boss": {
         "hp": 1600, "speed": 1.3, "melee_dmg": 30, "atk_range": 1.7, "atk_cd": 1.2,
         "ranged": True, "preferred": 3.5, "proj_dmg": 14, "fire_cd": 1.6,
@@ -82,6 +92,16 @@ class Enemy:
         self.vscale = base.get("vscale", 0.95)
         self.radius = base.get("radius", 0.3)
         self.is_boss = base.get("is_boss", False)
+        # Bomber (kamikaze) stats.
+        self.is_bomber = base.get("is_bomber", False)
+        self.explode_dmg = base.get("explode_dmg", 0) * diff["enemy_damage"]
+        self.explode_radius = base.get("explode_radius", 1.5)
+        # Healer (support) stats.
+        self.is_healer = base.get("is_healer", False)
+        self.heal_amount = base.get("heal_amount", 0)
+        self.heal_interval = base.get("heal_interval", 3.0)
+        self.heal_radius = base.get("heal_radius", 5.0)
+        self.heal_cd = self.heal_interval
 
         self.sprites = sprite_set                # Animation frames.
         self.state = "idle"                      # AI state.
@@ -175,6 +195,7 @@ class Enemy:
         if self.attack_pose_t > 0: self.attack_pose_t = max(0.0, self.attack_pose_t - dt)
         if self.pain_t > 0: self.pain_t = max(0.0, self.pain_t - dt)
         if self.los_cd > 0: self.los_cd = max(0.0, self.los_cd - dt)
+        if self.heal_cd > 0: self.heal_cd = max(0.0, self.heal_cd - dt)
 
         # Distance to the player.
         dx = player.x - self.x; dy = player.y - self.y
@@ -191,6 +212,27 @@ class Enemy:
 
         # Line of sight (cached) is only needed by ranged attackers.
         los = self._visible(level, player) if self.ranged else True
+
+        # --- Bomber: rush the player and detonate ---
+        if self.is_bomber:
+            self.state = "attack" if dist <= self.atk_range + 0.6 else "chase"
+            self._move_toward(level, player.x, player.y, dt, sign=1.0)
+            if dist <= self.atk_range:
+                game.bomber_explode(self)        # Game applies AoE + kills her.
+            return
+
+        # --- Healer: hang back and periodically heal nearby demon-girls ---
+        if self.is_healer:
+            if dist < 3.0:
+                self._move_toward(level, player.x, player.y, dt, sign=-1.0)  # Keep clear.
+            elif dist > 6.0:
+                self._move_toward(level, player.x, player.y, dt, sign=1.0)
+            if self.heal_cd <= 0:
+                self.heal_cd = self.heal_interval
+                if game.heal_allies(self):       # Returns True if anyone was healed.
+                    self.attack_pose_t = 0.35
+                    self._say(game.audio, "powerup")
+            return
 
         # --- Boss: periodically summon a dasher minion ---
         if self.can_summon and self.summon_cd <= 0 and dist < config.ENEMY_SIGHT_RANGE:

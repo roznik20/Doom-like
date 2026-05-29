@@ -30,14 +30,19 @@ _CHAR_TO_WALL = {
     "#": config.TEX_BRICK, "F": config.TEX_FLESH, "R": config.TEX_RUNE,
     "X": config.TEX_EXIT, "|": config.TEX_DOOR, "T": config.TEX_METAL,
     "B": config.TEX_BOSS,
+    "J": config.TEX_DOOR_RED, "K": config.TEX_DOOR_BLUE, "N": config.TEX_DOOR_YELLOW,
 }
 # Map enemy characters to archetype keys.
-_CHAR_TO_ENEMY = {"i": "imp", "c": "caster", "b": "brute", "d": "dasher", "Q": "boss"}
-# Map pickup/ammo/powerup characters to a (category, kind) the game understands.
+_CHAR_TO_ENEMY = {
+    "i": "imp", "c": "caster", "b": "brute", "d": "dasher", "Q": "boss",
+    "o": "bomber", "y": "healer",
+}
+# Map pickup/ammo/powerup/key characters to the kind the game understands.
 _CHAR_TO_PICKUP = {
     "h": "health", "m": "mana", "a": "armor",
     "s": "shells", "r": "rounds", "e": "energy",
     "q": "quad", "z": "haste", "g": "shield",
+    "j": "key_red", "k": "key_blue", "n": "key_yellow",
 }
 
 
@@ -50,7 +55,8 @@ def parse_level(rows, name, fill="#"):
     start = (1.5, 1.5)                           # Default player spawn.
     enemies = []                                 # (etype, x, y) spawns.
     pickups = []                                 # {x, y, kind} pickups.
-    doors = []                                   # (x, y) door cells.
+    doors = []                                   # (x, y) door cells (incl. locked).
+    hazards = []                                 # (x, y) lava floor cells.
 
     for y, line in enumerate(rows):
         grid_row = []
@@ -58,13 +64,15 @@ def parse_level(rows, name, fill="#"):
             if ch in _CHAR_TO_WALL:
                 wall_id = _CHAR_TO_WALL[ch]
                 grid_row.append(wall_id)
-                if wall_id == config.TEX_DOOR:
-                    doors.append((x, y))         # Remember door cells.
+                if wall_id in config.DOOR_TILES:
+                    doors.append((x, y))         # Remember every door cell.
             else:
                 grid_row.append(0)               # Walkable floor.
                 cx, cy = x + 0.5, y + 0.5        # Entity center.
                 if ch == "P":
                     start = (cx, cy)
+                elif ch == "L":
+                    hazards.append((x, y))       # Lava hazard floor.
                 elif ch in _CHAR_TO_ENEMY:
                     enemies.append((_CHAR_TO_ENEMY[ch], cx, cy))
                 elif ch in _CHAR_TO_PICKUP:
@@ -80,6 +88,7 @@ def parse_level(rows, name, fill="#"):
         "enemies": enemies,
         "pickups": pickups,
         "doors": doors,
+        "hazards": hazards,
     }
 
 
@@ -153,7 +162,31 @@ LEVEL_3 = parse_level([
 ], "Level 3 — The Rune Sanctum", fill="R")
 
 # ---------------------------------------------------------------------------
-# Level 4 — The Throne of the Demon Queen (BOSS arena + adds + powerups)
+# Level 4 — The Molten Vault (lava hazards, bombers, healers, keys + a locked
+# vault). Designed as an open pillared hall so the exit is always reachable.
+# ---------------------------------------------------------------------------
+LEVEL_MOLTEN = parse_level([
+    "TTTTTTTTTTTTTTTTTTTTTTTT",
+    "TP...o......LL......o..T",
+    "T..TT...TT......TT..TT.T",
+    "T...n.......j.........aT",
+    "T.TT...LLL...LLL...TT..T",
+    "T....y.....q.....y....T",
+    "T..TT...TT...TT...TT..T",
+    "T.......|........|....T",
+    "T..o..LL....d...LL..o.T",
+    "T.TT.....TT...TT.....TT",
+    "T....g.......s....z...T",
+    "T..TT...LLL...LLL..TT.T",
+    "T.......o.....o.....e.T",
+    "T..TT..........JTT...gT",
+    "T....h....e....q....m.T",
+    "T........|.........d.XT",
+    "TTTTTTTTTTTTTTTTTTTTTTTT",
+], "Level 4 — The Molten Vault", fill="T")
+
+# ---------------------------------------------------------------------------
+# Level 5 — The Throne of the Demon Queen (BOSS arena + adds + powerups)
 # ---------------------------------------------------------------------------
 LEVEL_4 = parse_level([
     "BBBBBBBBBBBBBBBBBBBBBBBB",
@@ -173,7 +206,7 @@ LEVEL_4 = parse_level([
     "B.BB.....s....r....BB..B",
     "B......h....m....a.....X",
     "BBBBBBBBBBBBBBBBBBBBBBBB",
-], "Level 4 — Throne of the Demon Queen", fill="B")
+], "Level 5 — Throne of the Demon Queen", fill="B")
 
 # The ordered list of levels the game plays through.
-LEVELS = [LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_4]
+LEVELS = [LEVEL_1, LEVEL_2, LEVEL_3, LEVEL_MOLTEN, LEVEL_4]

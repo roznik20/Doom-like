@@ -11,12 +11,14 @@ HUD for drawing.
 import math               # Angle math for cones/hitscans.
 import random             # Random spread, summon jitter, screen shake.
 import pygame             # Windowing, events, timing.
+import numpy as np        # Building the hazard grid for lava rendering.
 
 from . import config      # Tunables.
 from . import textures    # Wall + flat texture builders.
 from . import sprites     # Sprite builders.
 from . import audio       # Synthesized sound bank.
 from . import maps        # Levels + catchphrases.
+from . import persist     # Settings + high-score save file.
 from .input import Input
 from .player import Player
 from .raycaster import Raycaster
@@ -51,11 +53,18 @@ class Game:
         # Core systems. Start the raycaster on level 1's theme.
         theme0 = config.LEVEL_THEMES[0]
         self.raycaster = Raycaster(self.textures, self.floors[theme0["floor"]], self.ceils[theme0["ceil"]])
+        self.raycaster.lava_tex = self.floors["lava"]        # Hazard floor texture.
         self.hud = HUD()
         self.input = Input()
         self.weapon = WeaponSystem(self.proj_sprites)
         self.player = Player(1.5, 1.5)
         self.particles = ParticleSystem()
+
+        # Load + apply persisted user settings (mouse, volume, FOV, minimap).
+        self.settings = persist.load_settings()
+        self.apply_settings()
+        # High-score table (top 10) loaded from disk.
+        self.highscores = persist.load_highscores()
 
         # An off-screen surface we render the world into so we can shake it.
         self.world_surface = pygame.Surface((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
@@ -91,6 +100,28 @@ class Game:
         self.message_timer = 0.0
         self.damage_flash = 0.0
         self.shake = 0.0               # Current screen-shake magnitude (pixels).
+        self.on_lava = False           # True while the player stands in lava.
+        self.locked_msg_cd = 0.0       # Throttle for "locked door" messages.
+
+        # Score combo (consecutive quick kills).
+        self.combo = 0                 # Current combo length.
+        self.combo_timer = 0.0         # Time left before the combo resets.
+        self.combo_mult = 1            # Current score multiplier.
+
+        # Recent damage directions for the on-screen damage indicators.
+        # Each entry: [world_angle, time_remaining].
+        self.damage_dirs = []
+
+        # Per-level timing + intermission stats.
+        self.level_time = 0.0
+        self.intermission = {}
+
+        # Options menu cursor + where to return when we close it.
+        self.options_index = 0
+        self.options_return = "title"
+
+        # Fullscreen automap toggle.
+        self.show_full_map = False
 
         # Misc.
         self.mouse_locked = False
@@ -98,6 +129,44 @@ class Game:
 
         # Start the menu music.
         self.audio.play_music("menu")
+
+    # ----- settings ----------------------------------------------------------
+
+    def apply_settings(self):
+        """Apply the current self.settings to config + audio (live)."""
+        s = self.settings
+        # Mouse sensitivity feeds the player's turn math via the config global.
+        config.MOUSE_SENSITIVITY = s["mouse_sensitivity"]
+        # Recompute the field-of-view-derived camera constants.
+        config.FOV = math.radians(s["fov_degrees"])
+        config.HALF_FOV = config.FOV / 2
+        config.PLANE_LENGTH = math.tan(config.HALF_FOV)
+        # Volumes.
+        self.audio.set_volumes(s["master_volume"], s["music_volume"])
+
+    def save_settings(self):
+        """Persist settings to disk."""
+        persist.save_settings(self.settings)
+
+    def options_list(self):
+        """Describe each editable option: (key, label, step, min, max, is_bool)."""
+        return [
+            ("mouse_sensitivity", "Mouse Sensitivity", 0.0004, 0.0004, 0.0080, False),
+            ("master_volume", "SFX Volume", 0.05, 0.0, 1.0, False),
+            ("music_volume", "Music Volume", 0.05, 0.0, 1.0, False),
+            ("fov_degrees", "Field of View", 5, 50, 100, False),
+            ("show_minimap", "Show Minimap", None, None, None, True),
+        ]
+
+    def _adjust_option(self, direction):
+        """Nudge the currently-selected option up/down and apply it live."""
+        key, label, step, lo, hi, is_bool = self.options_list()[self.options_index]
+        if is_bool:
+            self.settings[key] = not self.settings[key]      # Toggle booleans.
+        else:
+            val = self.settings[key] + step * direction      # Step numeric values.
+            self.settings[key] = max(lo, min(hi, val))       # Clamp to range.
+        self.apply_settings()                                # Take effect immediately.
 
     # ----- messaging / effects ----------------------------------------------
 
@@ -150,21 +219,39 @@ class Game:
         self.level["door_frac"] = {cell: 0.0 for cell in self.level["doors"]}
         self.door_timer = {cell: 0.0 for cell in self.level["doors"]}
 
+        # Build the hazard (lava) lookup set + a numpy grid for fast rendering.
+        self.hazard_set = set(self.level["hazards"])
+        hg = np.zeros((self.level["height"], self.level["width"]), dtype=bool)
+        for (hx, hy) in self.level["hazards"]:
+            hg[hy, hx] = True
+        self.level["hazard_grid"] = hg
+
+        # Reset per-level timing + combo.
+        self.level_time = 0.0
+        self.combo = 0
+        self.combo_timer = 0.0
+        self.combo_mult = 1
+        self.damage_dirs = []
+        self._cleared = False                     # "Area cleared" announced flag.
+        self.on_lava = False
+
         self.set_message(self.level["name"], 3.0)
-        # If this level has a boss, play a roar on entry.
+        # Pick the right music: a boss level gets the boss theme.
         if self.boss is not None:
+            self.audio.play_music("boss")
             self.audio.play("boss_roar")
             self.add_shake(10)
+        else:
+            self.audio.play_music("battle")
 
     def start_run(self):
         """Begin a fresh playthrough at the selected difficulty."""
         self.difficulty = config.DIFFICULTIES[self.difficulty_names[self.menu_index]]
         self.score = 0
         self.total_kills = 0
-        self.load_level(0)
+        self.load_level(0)               # load_level also selects the music.
         self.state = "playing"
         self.lock_mouse(True)
-        self.audio.play_music("battle")
 
     def quit_to_title(self):
         """Return to the title screen."""
@@ -208,18 +295,24 @@ class Game:
     # ----- combat resolution -------------------------------------------------
 
     def register_kill(self, enemy):
-        """Update score/kills and spawn a celebratory burst for a defeated foe."""
-        self.score += int(enemy.score)
+        """Update score/kills (with combo multiplier) and spawn a burst."""
+        # Grow the combo and refresh its countdown.
+        self.combo += 1
+        self.combo_timer = config.COMBO_WINDOW
+        self.combo_mult = min(config.COMBO_MAX, 1 + self.combo // 2)
+        # Award combo-multiplied points.
+        self.score += int(enemy.score) * self.combo_mult
         self.level_kills += 1
         self.total_kills += 1
         self.player.kills += 1
         self.particles.kill_burst(enemy.x, enemy.y)
+        # Celebrate a high combo with a banner.
+        if self.combo_mult >= 3:
+            self.set_message("COMBO x{}!".format(self.combo_mult), 1.0)
         if enemy.is_boss:
             self.set_message("THE DEMON QUEEN FALLS! To the exit!", 4.0)
             self.add_shake(16)
             self.audio.play("level_clear")
-        elif self.level_kills >= self.level_total:
-            self.set_message("Area cleared! Find the exit portal!", 3.0)
 
     def resolve_melee(self, descriptor):
         """Apply a melee cone hit (Holy Sword) to enemies in front of the player."""
@@ -278,6 +371,31 @@ class Game:
                             break
                 if hit_enemies and not pierce:
                     break
+
+    def bomber_explode(self, enemy):
+        """A Bomber detonates: AoE damage to the player + a big particle burst."""
+        if enemy.state == "dead":
+            return                                          # Already gone.
+        enemy.state = "dead"                                # She's consumed by the blast.
+        self.particles.kill_burst(enemy.x, enemy.y, color=(255, 140, 40))
+        self.particles.sparks(enemy.x, enemy.y, (255, 210, 90))
+        self.audio.play("explode")
+        self.add_shake(12)
+        # Damage the player if within the blast radius (suicide = no score).
+        if math.hypot(self.player.x - enemy.x, self.player.y - enemy.y) <= enemy.explode_radius:
+            self.player.take_damage(enemy.explode_dmg)
+
+    def heal_allies(self, healer):
+        """A Healer mends nearby wounded demon-girls; returns True if any healed."""
+        healed = False
+        for e in self.enemies:
+            if e is healer or not e.alive:
+                continue
+            if e.hp < e.max_hp and math.hypot(e.x - healer.x, e.y - healer.y) <= healer.heal_radius:
+                e.hp = min(e.max_hp, e.hp + healer.heal_amount)
+                self.particles.sparks(e.x, e.y, (120, 255, 160))
+                healed = True
+        return healed
 
     def update_projectiles(self, dt):
         """Advance every projectile and resolve wall/enemy/player collisions."""
@@ -338,14 +456,38 @@ class Game:
             self.player.haste_timer = config.POWERUP_HASTE_DURATION; self.set_message("HASTE!", 2.0); self.audio.play("powerup")
         elif kind == "shield":
             self.player.shield_timer = config.POWERUP_SHIELD_DURATION; self.set_message("DIVINE SHIELD!", 2.0); self.audio.play("powerup")
+        elif kind in ("key_red", "key_blue", "key_yellow"):
+            color = kind.split("_")[1]                       # "red"/"blue"/"yellow".
+            self.player.keys.add(color)
+            self.set_message("Picked up the {} key!".format(color.upper()), 1.6)
+            self.audio.play("powerup")
 
     def update_doors(self, dt):
-        """Open doors the player approaches; close them again after a delay."""
+        """Open doors the player approaches; close them after a delay.
+
+        Locked (colored) doors only open if the player holds the matching key;
+        otherwise approaching them rattles and prints a hint.
+        """
+        if self.locked_msg_cd > 0:
+            self.locked_msg_cd = max(0.0, self.locked_msg_cd - dt)
         door_frac = self.level["door_frac"]
+        grid = self.level["grid"]
         for cell in self.level["doors"]:
             cx, cy = cell[0] + 0.5, cell[1] + 0.5
             dist = math.hypot(self.player.x - cx, self.player.y - cy)
-            opening = dist <= config.DOOR_OPEN_RANGE
+            near = dist <= config.DOOR_OPEN_RANGE
+            tile = grid[cell[1]][cell[0]]
+            # Locked doors require the matching key to open.
+            required = config.LOCKED_DOOR_KEY.get(tile)
+            if required is not None and required not in self.player.keys:
+                # Can't open without the key; nag the player if they're close.
+                if near and self.locked_msg_cd <= 0:
+                    self.set_message("Locked — need the {} key!".format(required.upper()), 1.4)
+                    self.audio.play("locked")
+                    self.locked_msg_cd = 1.5
+                opening = False
+            else:
+                opening = near
             if opening:
                 self.door_timer[cell] = config.DOOR_STAY_OPEN          # Keep it open.
                 target = 1.0
@@ -361,13 +503,27 @@ class Game:
                 door_frac[cell] = max(0.0, frac - config.DOOR_SPEED * dt)
 
     def check_exit(self):
-        """Advance to the next level (or win) if standing on the exit tile."""
+        """On the exit tile: show an intermission, or win on the final level."""
         gx, gy = int(self.player.x), int(self.player.y)
         if self.level["grid"][gy][gx] == config.TEX_EXIT:
             self.audio.play("level_clear")
+            # Snapshot this level's stats for the intermission/victory screen.
+            self.intermission = {
+                "level": self.level["name"],
+                "kills": self.level_kills,
+                "total": self.level_total,
+                "time": self.level_time,
+                "score": self.score,
+                "next_index": self.level_index + 1,
+            }
             if self.level_index + 1 < len(maps.LEVELS):
-                self.load_level(self.level_index + 1)
+                # Pause into the intermission summary; Enter continues.
+                self.state = "intermission"
+                self.lock_mouse(False)
             else:
+                # Final level cleared — record the score and show victory.
+                self.highscores = persist.add_highscore("HERO", self.score,
+                                                        self.difficulty_names[self.menu_index])
                 self.state = "victory"
                 self.lock_mouse(False)
                 self.audio.play_music("menu")
@@ -378,9 +534,23 @@ class Game:
         """Advance one frame of actual gameplay."""
         self.input.poll(self.mouse_locked)
 
+        # Track how long this level has taken (for the intermission stats).
+        self.level_time += dt
+
         # Move/turn the player.
         self.player.just_hurt = False
         self.player.update(dt, self.input, self.level)
+
+        # Standing in lava hurts over time (independent of the hit flash).
+        gx, gy = int(self.player.x), int(self.player.y)
+        self.on_lava = (gx, gy) in self.hazard_set
+        if self.on_lava and not self.player.invulnerable():
+            self.player.health -= config.HAZARD_DPS * dt
+            if random.random() < 0.4:
+                self.particles.sparks(self.player.x, self.player.y, (255, 140, 40))
+            if self.player.health <= 0:
+                self.player.health = 0
+                self.player.dead = True
 
         # Weapon timers + bob (bob only while walking).
         self.weapon.update(dt, getattr(self.player, "moving", False))
@@ -431,18 +601,47 @@ class Game:
             self.damage_flash = 0.3
             self.add_shake(6)
             self.audio.play("hurt")
+            # Record the direction of the likely attacker (nearest awake enemy)
+            # so the HUD can show a damage indicator pointing toward the threat.
+            nearest = None
+            best = 1e9
+            for e in self.enemies:
+                if not e.alive or not e.aggroed:
+                    continue
+                d = math.hypot(e.x - self.player.x, e.y - self.player.y)
+                if d < best:
+                    best = d; nearest = e
+            if nearest is not None:
+                ang = math.atan2(nearest.y - self.player.y, nearest.x - self.player.x)
+                self.damage_dirs.append([ang, 1.0])
 
-        # Decay timers.
+        # Combo countdown — resets the multiplier if you stop killing.
+        if self.combo_timer > 0:
+            self.combo_timer = max(0.0, self.combo_timer - dt)
+            if self.combo_timer == 0:
+                self.combo = 0; self.combo_mult = 1
+
+        # Decay timers + damage indicators.
         if self.message_timer > 0:
             self.message_timer = max(0.0, self.message_timer - dt)
         if self.damage_flash > 0:
             self.damage_flash = max(0.0, self.damage_flash - dt)
         if self.shake > 0:
             self.shake = max(0.0, self.shake - config.SCREEN_SHAKE_DECAY * dt)
+        for d in self.damage_dirs:
+            d[1] -= dt * 1.5                      # Fade each indicator out.
+        self.damage_dirs = [d for d in self.damage_dirs if d[1] > 0]
 
-        # Player death.
+        # Announce "area cleared" once no demon-girls remain alive.
+        if not getattr(self, "_cleared", False) and all(not e.alive for e in self.enemies) and self.enemies:
+            self._cleared = True
+            self.set_message("Area cleared! Find the exit portal!", 3.0)
+
+        # Player death -> record the score and show the game-over screen.
         if self.player.dead:
             self.audio.play("death")
+            self.highscores = persist.add_highscore("HERO", self.score,
+                                                    self.difficulty_names[self.menu_index])
             self.state = "gameover"
             self.lock_mouse(False)
             self.audio.play_music("menu")
@@ -483,12 +682,16 @@ class Game:
                         self.menu_index = (self.menu_index - 1) % len(self.difficulty_names)
                     elif event.key in (pygame.K_DOWN, pygame.K_s):
                         self.menu_index = (self.menu_index + 1) % len(self.difficulty_names)
+                    elif event.key == pygame.K_o:
+                        self.options_return = "title"; self.options_index = 0; self.state = "options"
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
                         self.start_run()
 
                 elif self.state == "playing":
                     if event.key == pygame.K_ESCAPE:
                         self.state = "paused"; self.lock_mouse(False)
+                    elif event.key == pygame.K_TAB:
+                        self.show_full_map = not self.show_full_map     # Toggle automap.
                     elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5):
                         slot = event.key - pygame.K_0          # Map key to slot number.
                         self.weapon.switch_slot(slot)
@@ -497,17 +700,41 @@ class Game:
                     if event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
                         self.state = "playing"; self.lock_mouse(True)
                     elif event.key == pygame.K_r:
-                        self.load_level(self.level_index); self.state = "playing"; self.lock_mouse(True); self.audio.play_music("battle")
+                        self.load_level(self.level_index); self.state = "playing"; self.lock_mouse(True)
+                    elif event.key == pygame.K_o:
+                        self.options_return = "paused"; self.options_index = 0; self.state = "options"
                     elif event.key == pygame.K_t:
                         self.quit_to_title()
+
+                elif self.state == "options":
+                    opts = self.options_list()
+                    if event.key in (pygame.K_UP, pygame.K_w):
+                        self.options_index = (self.options_index - 1) % len(opts)
+                    elif event.key in (pygame.K_DOWN, pygame.K_s):
+                        self.options_index = (self.options_index + 1) % len(opts)
+                    elif event.key in (pygame.K_LEFT, pygame.K_a):
+                        self._adjust_option(-1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                        self._adjust_option(1)
+                    elif event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                        self.save_settings(); self.state = self.options_return
+
+                elif self.state == "intermission":
+                    if event.key == pygame.K_RETURN:
+                        self.load_level(self.intermission["next_index"])
+                        self.state = "playing"; self.lock_mouse(True)
 
                 elif self.state == "gameover":
                     if event.key == pygame.K_RETURN:
                         self.start_run()
+                    elif event.key == pygame.K_t:
+                        self.quit_to_title()
 
                 elif self.state == "victory":
                     if event.key == pygame.K_RETURN:
                         self.start_run()
+                    elif event.key == pygame.K_t:
+                        self.quit_to_title()
 
     # ----- rendering ---------------------------------------------------------
 
@@ -523,6 +750,9 @@ class Game:
             oy = random.uniform(-self.shake, self.shake)
             self.screen.fill((0, 0, 0))
             self.screen.blit(self.world_surface, (ox, oy))
+            # Lava tint at the screen edges while standing in fire.
+            if self.on_lava:
+                self.hud.draw_lava_tint(self.screen)
             # HUD on top (steady).
             self.hud.draw_hud(self.screen, {
                 "player": self.player,
@@ -539,21 +769,35 @@ class Game:
                 "enemies": self.enemies,
                 "pickups": self.pickups,
                 "boss": self.boss,
+                "show_minimap": self.settings["show_minimap"],
+                "combo_mult": self.combo_mult,
+                "damage_dirs": self.damage_dirs,
+                "keys": self.player.keys,
             })
+            # Fullscreen automap overlay (Tab).
+            if self.show_full_map:
+                self.hud.draw_full_map(self.screen, self.level, self.player, self.enemies, self.pickups)
             if self.state == "paused":
                 self.hud.draw_pause(self.screen)
 
         elif self.state == "title":
             self.screen.fill((8, 3, 6))
-            self.hud.draw_title(self.screen, self.difficulty_names, self.menu_index)
+            self.hud.draw_title(self.screen, self.difficulty_names, self.menu_index, self.highscores)
+
+        elif self.state == "options":
+            self.screen.fill((8, 3, 6))
+            self.hud.draw_options(self.screen, self.options_list(), self.settings, self.options_index)
+
+        elif self.state == "intermission":
+            self.hud.draw_intermission(self.screen, self.intermission)
 
         elif self.state == "gameover":
             stats = "Score {}   Demon-girls defeated {}".format(self.score, self.total_kills)
-            self.hud.draw_gameover(self.screen, stats)
+            self.hud.draw_gameover(self.screen, stats, self.highscores)
 
         elif self.state == "victory":
             stats = "Score {}   Demon-girls defeated {}".format(self.score, self.total_kills)
-            self.hud.draw_victory(self.screen, stats)
+            self.hud.draw_victory(self.screen, stats, self.highscores)
 
         pygame.display.flip()
 
