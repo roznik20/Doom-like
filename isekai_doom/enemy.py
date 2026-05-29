@@ -92,6 +92,7 @@ class Enemy:
         self.vscale = base.get("vscale", 0.95)
         self.radius = base.get("radius", 0.3)
         self.is_boss = base.get("is_boss", False)
+        self.enraged = False                     # Boss enters a faster phase at half HP.
         # Bomber (kamikaze) stats.
         self.is_bomber = base.get("is_bomber", False)
         self.explode_dmg = base.get("explode_dmg", 0) * diff["enemy_damage"]
@@ -115,6 +116,12 @@ class Enemy:
         self.pain_t = 0.0                        # Brief flinch timer after being hit.
         self.los_cd = 0.0                        # Throttle timer for the LOS cache.
         self.los_val = False                     # Last cached line-of-sight result.
+        # --- Jiggle physics (secondary motion / bounce) ---
+        self.jiggle_phase = random.uniform(0, 6.283)   # Random start so they're out of sync.
+        self.jiggle_amp = 0.05                   # Current wobble amplitude (eased toward a target).
+        self.jiggle = 0.0                        # Signed wobble value the renderer reads.
+        self.prev_x = x                          # Last position (to measure speed for the bounce).
+        self.prev_y = y
 
     # ----- helpers -----------------------------------------------------------
 
@@ -197,6 +204,20 @@ class Enemy:
         if self.los_cd > 0: self.los_cd = max(0.0, self.los_cd - dt)
         if self.heal_cd > 0: self.heal_cd = max(0.0, self.heal_cd - dt)
 
+        # --- Jiggle physics ---
+        # Measure how far she moved last frame; faster motion -> bigger bounce.
+        moved = math.hypot(self.x - self.prev_x, self.y - self.prev_y)
+        self.prev_x, self.prev_y = self.x, self.y
+        freq = 12.0 if moved > 0.001 else 5.0           # Bounce faster while walking.
+        self.jiggle_phase += dt * freq
+        target = 0.05 + min(0.25, (moved / max(dt, 1e-4)) * 0.04)   # Movement-driven amplitude.
+        if self.pain_t > 0:
+            target += 0.25                              # Big wobble right after being hit.
+        if self.is_boss:
+            target *= 0.5                               # The Queen jiggles with restraint.
+        self.jiggle_amp += (target - self.jiggle_amp) * min(1.0, dt * 8)
+        self.jiggle = math.sin(self.jiggle_phase) * self.jiggle_amp
+
         # Distance to the player.
         dx = player.x - self.x; dy = player.y - self.y
         dist = math.hypot(dx, dy)
@@ -233,6 +254,14 @@ class Enemy:
                     self.attack_pose_t = 0.35
                     self._say(game.audio, "powerup")
             return
+
+        # --- Boss: enrage at half health (faster fire, speed, summons) ---
+        if self.is_boss and not self.enraged and self.hp < self.max_hp * 0.5:
+            self.enraged = True
+            self.fire_cd_max *= 0.55              # Fire volleys more often.
+            self.speed *= 1.3                     # Move faster.
+            self.summon_interval *= 0.55          # Summon minions more often.
+            self.spread *= 1.25                   # Wider, deadlier volleys.
 
         # --- Boss: periodically summon a dasher minion ---
         if self.can_summon and self.summon_cd <= 0 and dist < config.ENEMY_SIGHT_RANGE:

@@ -17,6 +17,9 @@ class Player:
         self.x = x                       # World x position.
         self.y = y                       # World y position.
         self.angle = 0.0                 # Facing direction in radians.
+        # Vertical look offset in pixels (positive = looking up). Shifts the
+        # rendered horizon; clamped so you can't flip the view over.
+        self.pitch = 0.0
         self.health = config.MAX_HEALTH  # Current health.
         self.mana = config.MAX_MANA      # Current mana (Spirit Bolt fuel).
         self.armor = 0                   # Current armor (soaks part of damage).
@@ -95,6 +98,12 @@ class Player:
         if inp.right:
             self.angle += config.TURN_SPEED * dt
         self.angle += inp.mouse_dx * config.MOUSE_SENSITIVITY
+
+        # --- Vertical look (pitch) ---
+        # Moving the mouse up (negative dy) looks up. Scale to pixels and clamp
+        # so the horizon can shift up to ~40% of the screen either way.
+        self.pitch -= inp.mouse_dy * config.PITCH_SENSITIVITY
+        self.pitch = max(-config.MAX_PITCH, min(config.MAX_PITCH, self.pitch))
 
         # --- Movement speed (walk, sprint, haste) ---
         speed = config.MOVE_SPEED * self.speed_multiplier()

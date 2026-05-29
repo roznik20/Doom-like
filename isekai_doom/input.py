@@ -25,6 +25,8 @@ class Input:
         self.fire = False           # Hold/press to attack.
         # Horizontal mouse movement since last frame (radians applied in player).
         self.mouse_dx = 0.0
+        # Vertical mouse movement since last frame (drives the look pitch).
+        self.mouse_dy = 0.0
 
     def poll(self, mouse_locked):
         """Refresh all action flags from the current input device state.
@@ -54,10 +56,11 @@ class Input:
 
         # --- Mouse-look ---
         if mouse_locked:
-            # get_rel returns motion since the last call; we only want the x part.
-            self.mouse_dx = pygame.mouse.get_rel()[0]
+            # get_rel returns motion since the last call (x = turn, y = pitch).
+            self.mouse_dx, self.mouse_dy = pygame.mouse.get_rel()
         else:
             # When not captured, ignore mouse motion (e.g. while in a menu).
             self.mouse_dx = 0.0
+            self.mouse_dy = 0.0
             # Still call get_rel to keep its internal delta from accumulating.
             pygame.mouse.get_rel()

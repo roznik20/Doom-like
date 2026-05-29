@@ -19,6 +19,7 @@ from . import sprites     # Sprite builders.
 from . import audio       # Synthesized sound bank.
 from . import maps        # Levels + catchphrases.
 from . import persist     # Settings + high-score save file.
+from . import story       # Narrative text (intro crawl, level intros, epilogue).
 from .input import Input
 from .player import Player
 from .raycaster import Raycaster
@@ -123,6 +124,11 @@ class Game:
         # Fullscreen automap toggle.
         self.show_full_map = False
 
+        # Storyline state: scrolling intro crawl + per-level intro lines.
+        self.story_scroll = 0.0        # Pixels the intro crawl has scrolled.
+        self.story_lines = []          # The current level's intro lines.
+        self.story_timer = 0.0         # How long to keep showing them.
+
         # Misc.
         self.mouse_locked = False
         self.running = True
@@ -201,6 +207,7 @@ class Game:
         self.enemies = []
         self.boss = None
         self.boss_roared = False
+        self.boss_enraged_announced = False
         for (etype, ex, ey) in self.level["enemies"]:
             sset = random.choice(self.enemy_sprite_sets[etype])
             e = Enemy(etype, ex, ey, sset, self.difficulty)
@@ -236,6 +243,9 @@ class Game:
         self.on_lava = False
 
         self.set_message(self.level["name"], 3.0)
+        # Show this level's story beat for a few seconds.
+        self.story_lines = story.LEVEL_INTROS.get(index, [])
+        self.story_timer = 6.0
         # Pick the right music: a boss level gets the boss theme.
         if self.boss is not None:
             self.audio.play_music("boss")
@@ -588,6 +598,11 @@ class Game:
             self.boss_roared = True
             self.audio.play("boss_roar"); self.add_shake(12)
             self.set_message("THE DEMON QUEEN AWAKENS!", 3.0)
+        # Announce the boss enrage phase once she drops below half health.
+        if self.boss is not None and self.boss.enraged and not self.boss_enraged_announced:
+            self.boss_enraged_announced = True
+            self.audio.play("boss_roar"); self.add_shake(16)
+            self.set_message("LILITH: Enough games, little hero!", 3.0)
 
         # Projectiles, particles, pickups, doors, exit.
         self.update_projectiles(dt)
@@ -622,6 +637,8 @@ class Game:
                 self.combo = 0; self.combo_mult = 1
 
         # Decay timers + damage indicators.
+        if self.story_timer > 0:
+            self.story_timer = max(0.0, self.story_timer - dt)
         if self.message_timer > 0:
             self.message_timer = max(0.0, self.message_timer - dt)
         if self.damage_flash > 0:
@@ -653,7 +670,8 @@ class Game:
         out = []
         for e in self.enemies:
             surf, vscale = e.current_sprite()
-            out.append({"x": e.x, "y": e.y, "surf": surf, "vscale": vscale})
+            out.append({"x": e.x, "y": e.y, "surf": surf, "vscale": vscale,
+                        "jiggle": e.jiggle, "chest": sprites.CHEST_RECT.get(e.etype)})
         for p in self.pickups:
             vs = 0.6 if p["kind"] in ("quad", "haste", "shield") else 0.5
             out.append({"x": p["x"], "y": p["y"], "surf": self.pickup_sprites[p["kind"]], "vscale": vs})
@@ -685,6 +703,13 @@ class Game:
                     elif event.key == pygame.K_o:
                         self.options_return = "title"; self.options_index = 0; self.state = "options"
                     elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        # Show the intro story crawl before the first level.
+                        self.story_scroll = 0.0
+                        self.state = "story"
+
+                elif self.state == "story":
+                    # Enter/Space/Esc skips the crawl and starts the run.
+                    if event.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_ESCAPE):
                         self.start_run()
 
                 elif self.state == "playing":
@@ -774,6 +799,9 @@ class Game:
                 "damage_dirs": self.damage_dirs,
                 "keys": self.player.keys,
             })
+            # Per-level story beat (shown briefly at the start of the level).
+            if self.story_timer > 0 and self.story_lines:
+                self.hud.draw_level_intro(self.screen, self.story_lines, self.story_timer)
             # Fullscreen automap overlay (Tab).
             if self.show_full_map:
                 self.hud.draw_full_map(self.screen, self.level, self.player, self.enemies, self.pickups)
@@ -783,6 +811,10 @@ class Game:
         elif self.state == "title":
             self.screen.fill((8, 3, 6))
             self.hud.draw_title(self.screen, self.difficulty_names, self.menu_index, self.highscores)
+
+        elif self.state == "story":
+            self.screen.fill((4, 2, 8))
+            self.hud.draw_story(self.screen, story.INTRO_CRAWL, self.story_scroll)
 
         elif self.state == "options":
             self.screen.fill((8, 3, 6))
@@ -797,7 +829,7 @@ class Game:
 
         elif self.state == "victory":
             stats = "Score {}   Demon-girls defeated {}".format(self.score, self.total_kills)
-            self.hud.draw_victory(self.screen, stats, self.highscores)
+            self.hud.draw_victory(self.screen, stats, self.highscores, story.EPILOGUE)
 
         pygame.display.flip()
 
@@ -811,5 +843,10 @@ class Game:
             self.handle_events()
             if self.state == "playing":
                 self.update_playing(dt)
+            elif self.state == "story":
+                # Scroll the intro crawl upward; auto-start once it has passed.
+                self.story_scroll += dt * 42
+                if self.story_scroll > len(story.INTRO_CRAWL) * 30 + config.WINDOW_HEIGHT:
+                    self.start_run()
             self.render()
         pygame.quit()

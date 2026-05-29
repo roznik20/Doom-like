@@ -45,6 +45,8 @@ MOVE_SPEED = 3.2             # Walking speed in map tiles per second.
 SPRINT_MULTIPLIER = 1.8      # Sprinting speed multiplier (hold Shift).
 TURN_SPEED = 2.8             # Keyboard turn speed in radians per second.
 MOUSE_SENSITIVITY = 0.0022   # Radians turned per pixel of horizontal mouse motion.
+PITCH_SENSITIVITY = 0.35     # Internal pixels of vertical look per pixel of mouse-Y.
+MAX_PITCH = 100              # Max horizon shift (internal pixels) up or down.
 PLAYER_RADIUS = 0.22         # Collision radius so the player can't slide into walls.
 PLAYER_HEIGHT = 0.5          # Eye height fraction (0.5 = halfway up the wall).
 

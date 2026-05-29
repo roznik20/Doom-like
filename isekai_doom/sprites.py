@@ -30,6 +30,21 @@ def _blank(w, h):
     return pygame.Surface((w, h), pygame.SRCALPHA)   # Per-pixel alpha keeps corners clear.
 
 
+# The chest/torso sub-rectangle of each enemy sprite, in fractions of the
+# sprite (x, y, width, height). The renderer crops this region and applies the
+# jiggle squash-and-stretch ONLY there, so the bust bounces but the rest of the
+# figure stays put. Tuned to each drawer's torso position.
+CHEST_RECT = {
+    "imp":    (0.30, 0.44, 0.40, 0.16),
+    "caster": (0.30, 0.42, 0.40, 0.15),
+    "brute":  (0.32, 0.38, 0.36, 0.15),
+    "dasher": (0.30, 0.48, 0.40, 0.15),
+    "bomber": (0.28, 0.52, 0.44, 0.18),
+    "healer": (0.30, 0.43, 0.40, 0.15),
+    "boss":   (0.38, 0.33, 0.24, 0.12),
+}
+
+
 # ---------------------------------------------------------------------------
 # Shared face/feature helpers (used by several enemy types)
 # ---------------------------------------------------------------------------

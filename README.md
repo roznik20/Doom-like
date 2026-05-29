@@ -33,7 +33,8 @@ On the title screen, pick a difficulty with **↑/↓** and press **Enter**.
 | Input | Action |
 |-------|--------|
 | `W` `A` `S` `D` | Move / strafe |
-| `←` `→` or **Mouse** | Turn / look |
+| `←` `→` or **Mouse X** | Turn / look left-right |
+| **Mouse Y** | Look up / down (pitch) |
 | **Left-Click** / `Space` | Fire |
 | `1` `2` `3` `4` `5` | Select weapon |
 | **Mouse Wheel** | Cycle weapons |
@@ -78,7 +79,17 @@ Damage is multiplied while **Quad Damage** is active.
 | **Demon Queen** | The boss: melee + fireball volleys + summons dashers |
 
 Each shouts original anime-style catchphrases when she spots you, attacks, or
-faints. Difficulty (4 presets) scales their health, damage, speed, and fire rate.
+faints, and has **chest jiggle physics** (a localized squash-and-stretch that
+bounces with movement and spikes when hit). The Demon Queen **enrages** at half
+health — faster volleys, faster summons. Difficulty (4 presets) scales enemy
+health, damage, speed, and fire rate.
+
+## Story
+
+A full narrative frames the run: an animated **intro crawl** (Kai Mori dies, the
+goddess Aria isekais him into the labyrinth), a short **story beat** at the
+start of each level, and a closing **epilogue** on victory. Press Enter to skip
+the crawl.
 
 ## Levels & hazards
 
@@ -156,6 +167,7 @@ Doom-like/
     ├── weapon.py           # 5 weapons, projectiles, bob, muzzle flash, view-models
     ├── enemy.py            # 6 archetypes + boss: AI, ranged, bombers, healers, summons
     ├── persist.py          # JSON save file for settings + high scores
+    ├── story.py            # Intro crawl, per-level story beats, epilogue
     ├── hud.py              # HUD, minimap, automap, boss bar, combo, keys, menus
     └── game.py             # State machine + main loop (combat, doors, hazards,
                             #   combo, intermission, options, music)

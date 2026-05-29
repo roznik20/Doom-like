@@ -93,18 +93,24 @@ def _rune():
     return _to_surface(arr)
 
 
-def _exit_portal():
-    """id 4 — swirling green-gold level-exit portal."""
+def _exit_portal(phase=0.0):
+    """id 4 — swirling green-gold level-exit portal at a given swirl phase."""
     arr = _new_array()
     xs, ys = _coords()
     dx = xs - 32; dy = ys - 32               # Offsets from center.
     dist = np.sqrt(dx * dx + dy * dy)        # Radial distance.
-    swirl = np.sin(dist * 0.5 - np.arctan2(dy, dx) * 3.0) * 0.5 + 0.5   # Vortex term.
+    # The `phase` rotates the vortex so a sequence of frames animates the swirl.
+    swirl = np.sin(dist * 0.5 - np.arctan2(dy, dx) * 3.0 + phase) * 0.5 + 0.5
     radial = np.clip(200 - dist * 4, 0, 255)
     arr[..., 0] = 40 + swirl * 60            # Gold-ish red.
     arr[..., 1] = np.clip(200 - dist * 2, 0, 255)  # Green glow.
-    arr[..., 2] = 80 + radial * 0.3          # Blue depth.
+    arr[..., 2] = 80 + radial * 0.3 + swirl * 40   # Blue depth pulses with the swirl.
     return _to_surface(arr)
+
+
+def _exit_portal_frames(n=8):
+    """Return a list of `n` portal frames whose swirl rotates over the loop."""
+    return [_exit_portal(2 * np.pi * i / n) for i in range(n)]
 
 
 def _door():
@@ -175,7 +181,7 @@ def build_textures():
         _brick(),                          # 1: brick.
         _flesh(),                          # 2: flesh.
         _rune(),                           # 3: rune stone.
-        _exit_portal(),                    # 4: exit portal.
+        _exit_portal_frames(),             # 4: exit portal (animated frame list).
         _door(),                           # 5: sliding door.
         _metal(),                          # 6: metal panel.
         _boss_wall(),                      # 7: boss-arena wall.

@@ -390,6 +390,38 @@ class HUD:
             self._text(screen, self.font_mid, line, WHITE, w // 2, h * 0.46 + i * 34)
         self._text(screen, self.font_big, "ENTER — Continue", WHITE, w // 2, h * 0.74, glow=PINK)
 
+    def draw_story(self, screen, lines, scroll):
+        """Draw the scrolling intro crawl (Star Wars-style), bottom to top."""
+        w, h = screen.get_size()
+        spacing = 30                              # Vertical pixels per line.
+        for i, line in enumerate(lines):
+            y = int(h - scroll + i * spacing)     # Each line rises as scroll grows.
+            if y < -20 or y > h + 20:
+                continue                          # Off-screen; skip.
+            # The first line is the big title; the rest are body text.
+            if i == 0:
+                self._text(screen, self.font_huge, line, PINK, w // 2, y, glow=(120, 0, 40))
+            elif line.startswith("[") or line.startswith("Reborn"):
+                self._text(screen, self.font_mid, line, GOLD, w // 2, y)
+            else:
+                self._text(screen, self.font_small, line, (220, 210, 215), w // 2, y)
+        # A persistent skip hint pinned to the bottom.
+        self._text(screen, self.font_tiny, "ENTER — skip", (160, 160, 175), w // 2, h - 16)
+
+    def draw_level_intro(self, screen, lines, timer):
+        """Show a level's story beat near the top, fading as the timer runs out."""
+        w, h = screen.get_size()
+        alpha = max(0, min(255, int(255 * min(1.0, timer / 1.5))))   # Fade out at the end.
+        # A dark band behind the text for readability.
+        band = pygame.Surface((w, 30 + 26 * len(lines)), pygame.SRCALPHA)
+        band.fill((0, 0, 0, int(alpha * 0.5)))
+        screen.blit(band, (0, int(h * 0.16)))
+        for i, line in enumerate(lines):
+            surf = self.font_mid.render(line, True, (255, 235, 220))
+            surf.set_alpha(alpha)                 # Apply the fade.
+            rect = surf.get_rect(center=(w // 2, int(h * 0.16) + 22 + i * 26))
+            screen.blit(surf, rect)
+
     def draw_pause(self, screen):
         """Pause overlay."""
         self._dim(screen)
@@ -411,13 +443,16 @@ class HUD:
             self._scores_block(screen, highscores, w // 2, h * 0.5)
         self._text(screen, self.font_big, "ENTER — Try Again     T — Title", WHITE, w // 2, h * 0.86, glow=PINK)
 
-    def draw_victory(self, screen, stats, highscores=None):
-        """Victory screen."""
+    def draw_victory(self, screen, stats, highscores=None, epilogue=None):
+        """Victory screen with the closing epilogue text."""
         self._dim(screen)
         w, h = screen.get_size()
-        self._text(screen, self.font_huge, "YOU ESCAPED!", CYAN, w // 2, h // 5, glow=(40, 80, 160))
-        self._text(screen, self.font_big, "The goddess smiles upon you.", GOLD, w // 2, h // 5 + 56)
-        self._text(screen, self.font_mid, stats, WHITE, w // 2, h * 0.42)
+        self._text(screen, self.font_huge, "YOU ESCAPED!", CYAN, w // 2, h * 0.12, glow=(40, 80, 160))
+        # The epilogue story lines.
+        if epilogue:
+            for i, line in enumerate(epilogue):
+                self._text(screen, self.font_small, line, (225, 215, 220), w // 2, h * 0.26 + i * 24)
+        self._text(screen, self.font_mid, stats, GOLD, w // 2, h * 0.62)
         if highscores is not None:
-            self._scores_block(screen, highscores, w // 2, h * 0.5)
-        self._text(screen, self.font_big, "ENTER — Play Again     T — Title", WHITE, w // 2, h * 0.86, glow=CYAN)
+            self._scores_block(screen, highscores, w // 2, h * 0.68)
+        self._text(screen, self.font_big, "ENTER — Play Again     T — Title", WHITE, w // 2, h * 0.9, glow=CYAN)

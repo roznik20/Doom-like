@@ -69,7 +69,7 @@ class Raycaster:
         H = config.RENDER_HEIGHT
         W = config.RENDER_WIDTH
         ts = textures.TEX_SIZE
-        horizon = self.horizon
+        horizon = self.horizon                  # May be shifted by the look pitch.
         # Leftmost (camera x=-1) and rightmost (camera x=+1) ray directions.
         ray0x = dirx - planex; ray0y = diry - planey
         ray1x = dirx + planex; ray1y = diry + planey
@@ -77,48 +77,46 @@ class Raycaster:
         bg = self._bg
         fog = self._fog
         maxd = config.MAX_DEPTH
-
-        # Distances from the horizon for which we'll cast (1 .. horizon-1 rows).
-        P = horizon - 1
-        if P < 1:
-            return
-        p = np.arange(1, horizon, dtype=np.float32)        # (P,) row offsets.
-        row_dist = posZ / p                                 # (P,) world distances.
-        cols = self._cols.reshape(W, 1).astype(np.float32)  # (W,1) column indices.
-        rd = row_dist.reshape(1, P)                         # (1,P) for broadcasting.
-
-        # World coordinates of every (column, row) sample point, broadcast to (W,P).
-        fx = player.x + rd * ray0x + cols * (rd * (ray1x - ray0x) / W)
-        fy = player.y + rd * ray0y + cols * (rd * (ray1y - ray0y) / W)
-        # Texel indices (wrapped), shape (W,P).
-        tx = (fx * ts).astype(np.int32) % ts
-        ty = (fy * ts).astype(np.int32) % ts
-        # Per-row fog shade, broadcast to (1,P,1).
-        shade = np.clip(1.0 - row_dist / maxd, 0.12, 1.0).reshape(1, P, 1)
-
-        # Sample + fog-blend the floor and ceiling in one shot each.
-        floor_px = self.floor_tex[ty, tx].astype(np.float32) * shade + fog * (1 - shade)
-        ceil_px = self.ceil_tex[ty, tx].astype(np.float32) * shade + fog * (1 - shade)
-
-        # Overlay lava on hazard floor cells (only if this level has any).
+        cols = self._cols.reshape(W, 1).astype(np.float32)   # (W,1) column indices.
         hazard_grid = level.get("hazard_grid") if level else None
-        if hazard_grid is not None and self.lava_tex is not None:
-            gh, gw = hazard_grid.shape
-            cellx = np.clip(fx.astype(np.int32), 0, gw - 1)   # World cell x per pixel.
-            celly = np.clip(fy.astype(np.int32), 0, gh - 1)   # World cell y per pixel.
-            mask = hazard_grid[celly, cellx]                  # (W,P) bool: is it lava?
-            if mask.any():
-                # Lava glows, so apply far less fog than normal floors.
-                lava_shade = np.clip(shade + 0.4, 0, 1)
-                lava_px = self.lava_tex[ty, tx].astype(np.float32) * lava_shade + fog * (1 - lava_shade)
-                floor_px = np.where(mask[..., None], lava_px, floor_px)
 
-        # Write the floor rows (horizon+1 .. horizon+P) and mirrored ceiling rows.
-        bg[:, horizon + 1:horizon + 1 + P, :] = floor_px.astype(np.uint8)
-        bg[:, horizon - 1:horizon - 1 - P:-1, :] = ceil_px.astype(np.uint8)
-        # Fill the two seam rows (horizon and row 0) with fog.
-        bg[:, horizon, :] = fog.astype(np.uint8)
-        bg[:, 0, :] = fog.astype(np.uint8)
+        def cast_region(p_vals, rows, tex, is_floor):
+            """Sample one horizontal band (floor or ceiling) and write it to bg."""
+            P = len(p_vals)
+            if P <= 0:
+                return
+            row_dist = posZ / p_vals                          # (P,) distances.
+            rd = row_dist.reshape(1, P)
+            fx = player.x + rd * ray0x + cols * (rd * (ray1x - ray0x) / W)
+            fy = player.y + rd * ray0y + cols * (rd * (ray1y - ray0y) / W)
+            tx = (fx * ts).astype(np.int32) % ts
+            ty = (fy * ts).astype(np.int32) % ts
+            shade = np.clip(1.0 - row_dist / maxd, 0.12, 1.0).reshape(1, P, 1)
+            px = tex[ty, tx].astype(np.float32) * shade + fog * (1 - shade)
+            # Lava overlay only applies to the floor band.
+            if is_floor and hazard_grid is not None and self.lava_tex is not None:
+                gh, gw = hazard_grid.shape
+                cellx = np.clip(fx.astype(np.int32), 0, gw - 1)
+                celly = np.clip(fy.astype(np.int32), 0, gh - 1)
+                mask = hazard_grid[celly, cellx]
+                if mask.any():
+                    lava_shade = np.clip(shade + 0.4, 0, 1)
+                    lava_px = self.lava_tex[ty, tx].astype(np.float32) * lava_shade + fog * (1 - lava_shade)
+                    px = np.where(mask[..., None], lava_px, px)
+            # Scatter the computed colors into their (arbitrary) screen rows.
+            bg[:, rows, :] = px.astype(np.uint8)
+
+        # Floor band: screen rows below the horizon (horizon+1 .. H-1).
+        if horizon < H - 1:
+            pf = np.arange(1, H - horizon, dtype=np.float32)
+            cast_region(pf, (horizon + pf).astype(np.int32), self.floor_tex, True)
+        # Ceiling band: screen rows above the horizon (0 .. horizon-1).
+        if horizon > 0:
+            pc = np.arange(1, horizon + 1, dtype=np.float32)
+            cast_region(pc, (horizon - pc).astype(np.int32), self.ceil_tex, False)
+        # Paint the seam row at the horizon (if on-screen) with fog.
+        if 0 <= horizon < H:
+            bg[:, horizon, :] = fog.astype(np.uint8)
 
         # Blit the whole background image to the render surface in one call.
         pygame.surfarray.blit_array(self.surface, bg)
@@ -220,8 +218,11 @@ class Raycaster:
             tex_x = int(wall_u * ts)
             tex_x = max(0, min(ts - 1, tex_x))
 
-            # Grab + stretch a 1px texture strip to the wall height.
+            # Grab + stretch a 1px texture strip to the wall height. Some texture
+            # entries are a list of animation frames; pick the current frame.
             tex = self.textures[hit_tile]
+            if isinstance(tex, list):
+                tex = tex[self._anim_idx % len(tex)]
             strip = tex.subsurface((tex_x, 0, 1, ts))
             column = pygame.transform.scale(strip, (1, max(1, line_h)))
 
@@ -305,6 +306,8 @@ class Raycaster:
             # sprites like the boss in an open arena).
             if np.all(self.zbuffer[c0:c1] > tY):
                 self.surface.blit(scaled, (left, top))
+                # Jiggle physics: bounce ONLY the chest sub-region of the sprite.
+                self._jiggle_chest(scaled, spr, left, top, draw_w, draw_h)
             else:
                 # Otherwise blit column-by-column so nearer walls occlude it.
                 for colx in range(c0, c1):
@@ -312,6 +315,37 @@ class Raycaster:
                         continue              # A wall is closer here.
                     strip = scaled.subsurface((colx - left, 0, 1, draw_h))
                     self.surface.blit(strip, (colx, top))
+
+    def _jiggle_chest(self, scaled, spr, left, top, draw_w, draw_h):
+        """Re-draw just the chest region of an enemy with a squash-and-stretch.
+
+        We crop the chest rectangle from the already-scaled sprite, scale that
+        small patch by the enemy's jiggle value (wider+shorter, anchored at its
+        underside so it bounces), and blit it back over the same spot. Only the
+        bust moves; the rest of the figure is untouched.
+        """
+        rect = spr.get("chest")
+        jig = spr.get("jiggle", 0.0)
+        # Skip when there's no chest rect (pickups/projectiles) or negligible wobble.
+        if rect is None or abs(jig) < 0.02:
+            return
+        rx = int(rect[0] * draw_w)            # Chest patch left within the sprite.
+        ry = int(rect[1] * draw_h)            # Chest patch top.
+        rw = max(1, int(rect[2] * draw_w))    # Chest patch width.
+        rh = max(1, int(rect[3] * draw_h))    # Chest patch height.
+        # Keep the patch inside the sprite bounds.
+        if rx + rw > draw_w or ry + rh > draw_h:
+            return
+        patch = scaled.subsurface((rx, ry, rw, rh))
+        # Quantize the wobble so a stationary enemy reuses a few patch sizes.
+        jq = round(jig * 4) / 4.0
+        cw = max(1, int(rw * (1.0 + jq * 0.22)))   # Bulge wider on the bounce.
+        ch = max(1, int(rh * (1.0 - jq * 0.10)))   # Squash a touch shorter.
+        patch_s = pygame.transform.scale(patch, (cw, ch))
+        # Anchor the patch's bottom-center where the chest's was, so it bounces.
+        bx = left + rx + rw // 2
+        by = top + ry + rh
+        self.surface.blit(patch_s, (bx - cw // 2, by - ch))
 
     def _draw_particles(self, player, particle_system, dirx, diry, planex, planey):
         """Draw every particle as a small distance-scaled, occluded dot."""
@@ -353,6 +387,15 @@ class Raycaster:
         diry = math.sin(player.angle)
         planex = -math.sin(player.angle) * config.PLANE_LENGTH
         planey = math.cos(player.angle) * config.PLANE_LENGTH
+
+        # Shift the horizon by the look pitch (vertical mouse-look), clamped so
+        # there's always some floor and ceiling band to draw.
+        base = config.RENDER_HEIGHT // 2
+        pitch = int(getattr(player, "pitch", 0.0))
+        self.horizon = max(24, min(config.RENDER_HEIGHT - 24, base + pitch))
+
+        # Current animation frame index for animated wall textures (time-based).
+        self._anim_idx = int(pygame.time.get_ticks() * 0.006)
 
         # 1) Textured floor + ceiling background.
         self._cast_floor_ceiling(player, level, dirx, diry, planex, planey)
