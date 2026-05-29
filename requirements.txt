@@ -1,0 +1,4 @@
+# Python dependencies for ISEKAI DOOM.
+# Install everything at once with:  pip install -r requirements.txt
+pygame>=2.5      # Window creation, rendering, input, and audio mixer
+numpy>=1.24      # Used to synthesize sound waveforms and speed up texture math
